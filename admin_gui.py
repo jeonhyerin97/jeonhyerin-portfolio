@@ -503,6 +503,13 @@ class DropZone(tk.Frame):
     
     def load_images(self):
         """이미지 로드"""
+        # 위젯이 유효한지 확인
+        try:
+            if not self.winfo_exists():
+                return
+        except:
+            return
+        
         self.images = []
         self.selected_images.clear()
         self.check_vars.clear()
@@ -566,9 +573,19 @@ class DropZone(tk.Frame):
     
     def _update_display(self):
         """화면 업데이트"""
+        # 위젯이 유효한지 확인
+        try:
+            if not self.winfo_exists() or not self.image_container.winfo_exists():
+                return
+        except:
+            return
+        
         # 기존 위젯 제거
-        for widget in self.image_container.winfo_children():
-            widget.destroy()
+        try:
+            for widget in self.image_container.winfo_children():
+                widget.destroy()
+        except Exception:
+            return
         
         self.check_vars.clear()
         
@@ -648,10 +665,14 @@ class DropZone(tk.Frame):
             if path.exists():
                 os.remove(str(path))
         
-        self.load_images()
-        self._renumber_images()
-        if self.on_change:
-            self.on_change()
+        try:
+            if self.winfo_exists():
+                self.load_images()
+                self._renumber_images()
+                if self.on_change:
+                    self.on_change()
+        except Exception:
+            pass
     
     def add_images(self):
         """이미지 추가"""
@@ -720,23 +741,34 @@ class DropZone(tk.Frame):
         
         # 결과 표시
         avg_reduction = total_reduction / processed if processed > 0 else 0
-        if avg_reduction > 0:
-            messagebox.showinfo("최적화 완료", 
-                              f"{processed}개 이미지 추가됨\n평균 {avg_reduction:.1f}% 용량 감소")
+        if processed > 0:
+            msg = f"{processed}개 이미지 추가됨"
+            if avg_reduction > 0:
+                msg += f"\n평균 {avg_reduction:.1f}% 용량 감소"
+            messagebox.showinfo("완료", msg)
         
-        self.load_images()
-        if self.on_change:
-            self.on_change()
+        # 위젯이 유효한 경우에만 업데이트
+        try:
+            if self.winfo_exists():
+                self.load_images()
+                if self.on_change:
+                    self.on_change()
+        except Exception:
+            pass
     
     def delete_image(self, img_path):
         """이미지 삭제 (단일)"""
         if messagebox.askyesno("확인", f"'{img_path.name}'을(를) 삭제하시겠습니까?"):
             if img_path.exists():
                 os.remove(str(img_path))
-            self.load_images()
-            self._renumber_images()
-            if self.on_change:
-                self.on_change()
+            try:
+                if self.winfo_exists():
+                    self.load_images()
+                    self._renumber_images()
+                    if self.on_change:
+                        self.on_change()
+            except Exception:
+                pass
     
     def move_image(self, idx, direction):
         """이미지 순서 변경"""
@@ -744,17 +776,24 @@ class DropZone(tk.Frame):
         if 0 <= new_idx < len(self.images):
             self.images[idx], self.images[new_idx] = self.images[new_idx], self.images[idx]
             self._renumber_images()
-            self.load_images()
-            if self.on_change:
-                self.on_change()
+            try:
+                if self.winfo_exists():
+                    self.load_images()
+                    if self.on_change:
+                        self.on_change()
+            except Exception:
+                pass
     
     def _renumber_images(self):
         """이미지 파일명 재정렬"""
-        if self.image_type == 'cover':
+        if self.image_type == 'cover' or self.image_type == 'thumb' or self.image_type == 'main':
             return
         
         if not self.images:
             return
+        
+        # 확장자 결정 (WebP 또는 JPG)
+        ext = '.webp' if USE_WEBP else '.jpg'
         
         if self.image_type == 'sub':
             temp_files = []
@@ -765,15 +804,12 @@ class DropZone(tk.Frame):
                     temp_files.append(temp_path)
             
             for i, temp_path in enumerate(temp_files):
-                new_path = self.project_folder / f"{str(i+1).zfill(2)}.jpg"
+                new_path = self.project_folder / f"{str(i+1).zfill(2)}{ext}"
                 if temp_path.exists():
-                    # 최적화된 jpg로 변환
-                    ImageOptimizer.optimize_for_web(temp_path, SUB_MAX_SIZE)
-                    temp_jpg = temp_path.with_suffix('.jpg')
-                    if temp_jpg.exists() and temp_jpg != new_path:
-                        shutil.move(str(temp_jpg), str(new_path))
-                    elif temp_path.exists():
-                        shutil.move(str(temp_path), str(new_path))
+                    # 최적화 후 반환된 경로 사용
+                    optimized_path, _ = ImageOptimizer.optimize_for_web(temp_path, SUB_MAX_SIZE)
+                    if optimized_path.exists() and optimized_path != new_path:
+                        shutil.move(str(optimized_path), str(new_path))
         
         elif self.image_type == 'model':
             model_folder = self.project_folder / "model_images"
@@ -785,14 +821,11 @@ class DropZone(tk.Frame):
                     temp_files.append(temp_path)
             
             for i, temp_path in enumerate(temp_files):
-                new_path = model_folder / f"{i+1}.jpg"
+                new_path = model_folder / f"{i+1}{ext}"
                 if temp_path.exists():
-                    ImageOptimizer.optimize_for_web(temp_path, MODEL_MAX_SIZE)
-                    temp_jpg = temp_path.with_suffix('.jpg')
-                    if temp_jpg.exists() and temp_jpg != new_path:
-                        shutil.move(str(temp_jpg), str(new_path))
-                    elif temp_path.exists():
-                        shutil.move(str(temp_path), str(new_path))
+                    optimized_path, _ = ImageOptimizer.optimize_for_web(temp_path, MODEL_MAX_SIZE)
+                    if optimized_path.exists() and optimized_path != new_path:
+                        shutil.move(str(optimized_path), str(new_path))
         
         elif self.image_type == 'slide':
             slide_folder = self._get_slide_folder()
@@ -806,14 +839,11 @@ class DropZone(tk.Frame):
                     temp_files.append(temp_path)
             
             for i, temp_path in enumerate(temp_files):
-                new_path = slide_folder / f"{i+1}.jpg"
+                new_path = slide_folder / f"{i+1}{ext}"
                 if temp_path.exists():
-                    ImageOptimizer.optimize_for_web(temp_path, SLIDE_MAX_SIZE)
-                    temp_jpg = temp_path.with_suffix('.jpg')
-                    if temp_jpg.exists() and temp_jpg != new_path:
-                        shutil.move(str(temp_jpg), str(new_path))
-                    elif temp_path.exists():
-                        shutil.move(str(temp_path), str(new_path))
+                    optimized_path, _ = ImageOptimizer.optimize_for_web(temp_path, SLIDE_MAX_SIZE)
+                    if optimized_path.exists() and optimized_path != new_path:
+                        shutil.move(str(optimized_path), str(new_path))
 
 
 class ProjectEditorDialog(tk.Toplevel):
@@ -987,6 +1017,42 @@ class ProjectEditorDialog(tk.Toplevel):
         desc_text.pack(fill=tk.X, pady=(3, 0))
         self.entries['description'] = desc_text
         
+        # === 커스텀 메타 필드 섹션 ===
+        # 먼저 위젯 리스트 초기화
+        self.custom_field_widgets = []
+        
+        custom_section = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
+        custom_section.pack(fill=tk.X, padx=20, pady=(20, 8))
+        
+        custom_header = tk.Frame(custom_section, bg=ModernStyle.BG_WHITE)
+        custom_header.pack(fill=tk.X)
+        
+        tk.Label(custom_header, text="추가 정보 필드", font=ModernStyle.get_font(12, 'bold'),
+                bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT)
+        
+        tk.Label(custom_section, text="프로젝트 상세페이지에 표시될 추가 정보 (예: COLLABORATOR, CLIENT, AREA 등)",
+                font=ModernStyle.get_font(8), bg=ModernStyle.BG_WHITE,
+                fg=ModernStyle.TEXT_SUBTLE).pack(anchor=tk.W, pady=(5, 0))
+        
+        # 커스텀 필드 컨테이너 (먼저 생성)
+        custom_fields_container = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
+        custom_fields_container.pack(fill=tk.X, padx=20, pady=5)
+        
+        # 컨테이너 참조 저장
+        self.custom_fields_container = custom_fields_container
+        
+        # + 버튼 추가 (컨테이너 생성 후)
+        tk.Button(custom_header, text="+ 필드 추가", font=ModernStyle.get_font(9),
+                 bg=ModernStyle.BG_WHITE, fg=ModernStyle.ACCENT,
+                 relief='solid', borderwidth=1, cursor='hand2',
+                 command=self._add_custom_field_click).pack(side=tk.RIGHT)
+        
+        # 기존 커스텀 필드 로드
+        existing_custom = self.project.get('custom_fields', [])
+        if existing_custom:
+            for cf in existing_custom:
+                self.add_custom_field(custom_fields_container, cf.get('label', ''), cf.get('value', ''))
+        
         # 공개/비공개
         vis_frame = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
         vis_frame.pack(fill=tk.X, padx=20, pady=15)
@@ -999,6 +1065,57 @@ class ProjectEditorDialog(tk.Toplevel):
         
         # 여백
         tk.Frame(scrollable, bg=ModernStyle.BG_WHITE, height=50).pack(fill=tk.X)
+    
+    def _add_custom_field_click(self):
+        """+ 버튼 클릭 시 커스텀 필드 추가"""
+        if hasattr(self, 'custom_fields_container'):
+            self.add_custom_field(self.custom_fields_container)
+    
+    def add_custom_field(self, container, label='', value=''):
+        """커스텀 메타 필드 추가"""
+        frame = tk.Frame(container, bg=ModernStyle.BG_WHITE)
+        frame.pack(fill=tk.X, pady=5)
+        
+        # 라벨 입력 (필드명)
+        label_frame = tk.Frame(frame, bg=ModernStyle.BG_WHITE)
+        label_frame.pack(fill=tk.X)
+        
+        tk.Label(label_frame, text="필드명 (대문자로 표시됨)", font=ModernStyle.get_font(8),
+                bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE).pack(side=tk.LEFT)
+        
+        # 삭제 버튼
+        def remove_field():
+            self.custom_field_widgets.remove(field_data)
+            frame.destroy()
+        
+        tk.Button(label_frame, text="✕", font=ModernStyle.get_font(8),
+                 bg=ModernStyle.BG_WHITE, fg=ModernStyle.DANGER,
+                 relief='flat', cursor='hand2', width=2,
+                 command=remove_field).pack(side=tk.RIGHT)
+        
+        label_entry = tk.Entry(frame, font=ModernStyle.get_font(9),
+                              bg=ModernStyle.BG_LIGHT, fg=ModernStyle.TEXT_PRIMARY,
+                              relief='solid', borderwidth=1)
+        label_entry.insert(0, label)
+        label_entry.pack(fill=tk.X, pady=(2, 5), ipady=5)
+        
+        # 값 입력
+        tk.Label(frame, text="내용", font=ModernStyle.get_font(8),
+                bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE).pack(anchor=tk.W)
+        
+        value_entry = tk.Entry(frame, font=ModernStyle.get_font(10),
+                              bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_PRIMARY,
+                              relief='solid', borderwidth=1)
+        value_entry.insert(0, value)
+        value_entry.pack(fill=tk.X, pady=(2, 0), ipady=8)
+        
+        # 구분선
+        tk.Frame(frame, bg=ModernStyle.BORDER, height=1).pack(fill=tk.X, pady=(10, 0))
+        
+        field_data = {'label_entry': label_entry, 'value_entry': value_entry, 'frame': frame}
+        self.custom_field_widgets.append(field_data)
+        
+        return field_data
     
     def create_image_tab(self, parent):
         """이미지 관리 탭"""
@@ -1178,6 +1295,16 @@ class ProjectEditorDialog(tk.Toplevel):
         if not display_title or display_title == old_title:
             display_title = title
         
+        # 커스텀 필드 수집 (줄바꿈 제거 - JSON 호환성)
+        custom_fields = []
+        if hasattr(self, 'custom_field_widgets'):
+            for field_data in self.custom_field_widgets:
+                label = field_data['label_entry'].get().strip().upper()
+                # 줄바꿈을 쉼표+공백으로 대체
+                value = field_data['value_entry'].get().strip().replace('\n', ', ').replace('\r', '')
+                if label and value:
+                    custom_fields.append({'label': label, 'value': value})
+        
         self.result = {
             'title': title,
             'slug': self.entries['slug'].get().strip() or title.lower().replace(' ', '-').replace('_', '-'),
@@ -1187,11 +1314,13 @@ class ProjectEditorDialog(tk.Toplevel):
             'duration': self.entries['duration'].get().strip(),
             'program': self.entries['program'].get().strip(),
             'studio': self.entries['studio'].get().strip(),
-            'description': self.entries['description'].get('1.0', tk.END).strip(),
+            # 줄바꿈을 공백으로 대체 (JSON 호환성)
+            'description': self.entries['description'].get('1.0', tk.END).strip().replace('\n', ' ').replace('\r', ''),
             'visible': self.visible_var.get(),
             'model_cols': self.model_cols.get(),
             'show_slides': self.show_slides.get(),
             'cover_ratio': self.cover_ratio.get(),
+            'custom_fields': custom_fields,
         }
         
         if self.on_save:
@@ -1207,22 +1336,38 @@ class ProjectEditorDialog(tk.Toplevel):
 
 
 class AboutEditorDialog(tk.Toplevel):
-    """About 페이지 편집"""
+    """About 페이지 편집 - EDUCATION, EXPERIENCE, RECOGNITION 포함"""
     
     def __init__(self, parent):
         super().__init__(parent)
         
         self.title("About 페이지 편집")
-        self.geometry("650x700")
+        self.geometry("750x850")
         self.configure(bg=ModernStyle.BG_WHITE)
         self.transient(parent)
         self.grab_set()
+        
+        # 중앙 배치
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() - 750) // 2
+        y = (self.winfo_screenheight() - 850) // 2
+        self.geometry(f"+{x}+{y}")
         
         self.load_about_data()
         self.create_ui()
     
     def load_about_data(self):
-        self.data = {'name': 'JEON HYERIN', 'tagline': '', 'bio': '', 'email': '', 'instagram': ''}
+        self.data = {
+            'name': 'JEON HYERIN', 
+            'tagline': '', 
+            'bio': '', 
+            'email': '', 
+            'instagram': '',
+            'studio_location': 'Seoul, Korea',
+            'education': [],
+            'experience': [],
+            'recognition': []
+        }
         try:
             with open(ABOUT_HTML, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -1241,15 +1386,41 @@ class AboutEditorDialog(tk.Toplevel):
                 paragraphs = re.findall(r'<p>([^<]+)</p>', match.group(1))
                 self.data['bio'] = '\n\n'.join(paragraphs)
             
-            # 이메일 (mailto: 링크에서 추출)
+            # 이메일
             match = re.search(r'href="mailto:([^"]+)"', content)
             if match: self.data['email'] = match.group(1)
             
-            # 인스타그램 (INSTAGRAM 라벨 뒤의 링크 텍스트)
+            # 인스타그램
             match = re.search(r'<span class="contact-label">INSTAGRAM</span>\s*<a[^>]*class="contact-value"[^>]*>([^<]+)</a>', content)
             if match: self.data['instagram'] = match.group(1).strip()
+            
+            # STUDIO 위치
+            match = re.search(r'<span class="contact-label">STUDIO</span>\s*<span class="contact-value">([^<]+)</span>', content)
+            if match: self.data['studio_location'] = match.group(1).strip()
+            
+            # EDUCATION 파싱
+            self.data['education'] = self._parse_info_section(content, 'EDUCATION')
+            
+            # EXPERIENCE 파싱
+            self.data['experience'] = self._parse_info_section(content, 'EXPERIENCE')
+            
         except Exception as e:
             print(f"About 데이터 로드 오류: {e}")
+    
+    def _parse_info_section(self, content, section_name):
+        """섹션의 항목들을 파싱 (한 줄 형식)"""
+        items = []
+        pattern = rf'<h2 class="info-heading">{section_name}</h2>\s*<ul class="info-list">([\s\S]*?)</ul>'
+        match = re.search(pattern, content)
+        if match:
+            list_content = match.group(1)
+            # 한 줄 형식 파싱
+            item_pattern = r'<li><span class="info-year">([^<]*)</span><span class="info-detail">([^<]*)</span></li>'
+            for item_match in re.finditer(item_pattern, list_content):
+                year = item_match.group(1).strip()
+                detail = item_match.group(2).strip()
+                items.append({'year': year, 'detail': detail})
+        return items
     
     def create_ui(self):
         # 스크롤 캔버스
@@ -1258,8 +1429,12 @@ class AboutEditorDialog(tk.Toplevel):
         scrollable = tk.Frame(canvas, bg=ModernStyle.BG_WHITE)
         
         scrollable.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scrollable, anchor="nw", width=610)
+        canvas_frame = canvas.create_window((0, 0), window=scrollable, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        def configure_scroll_width(event):
+            canvas.itemconfig(canvas_frame, width=event.width - 20)
+        canvas.bind('<Configure>', configure_scroll_width)
         
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
@@ -1269,32 +1444,54 @@ class AboutEditorDialog(tk.Toplevel):
         scrollbar.pack(side="right", fill="y")
         
         self.entries = {}
+        self.section_widgets = {'education': [], 'experience': []}
         
         # 헤더
         tk.Label(scrollable, text="About 페이지 편집", font=ModernStyle.get_font(16, 'bold'),
-                bg=ModernStyle.BG_WHITE).pack(anchor=tk.W, padx=20, pady=20)
+                bg=ModernStyle.BG_WHITE).pack(anchor=tk.W, padx=20, pady=(20, 10))
         
-        # 필드들
-        for key, label in [('name', '이름'), ('tagline', '태그라인'), ('email', '이메일'), ('instagram', '인스타그램')]:
+        # === 기본 정보 섹션 ===
+        self._create_section_header(scrollable, "기본 정보")
+        
+        for key, label in [('name', '이름'), ('tagline', '태그라인 (직업/위치)')]:
             frame = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
-            frame.pack(fill=tk.X, padx=20, pady=8)
+            frame.pack(fill=tk.X, padx=20, pady=5)
             tk.Label(frame, text=label, font=ModernStyle.get_font(9),
                     bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE).pack(anchor=tk.W)
             entry = tk.Entry(frame, font=ModernStyle.get_font(10), relief='solid', borderwidth=1)
             entry.insert(0, self.data.get(key, ''))
-            entry.pack(fill=tk.X, pady=(3, 0), ipady=8)
+            entry.pack(fill=tk.X, pady=(3, 0), ipady=6)
             self.entries[key] = entry
         
         # 소개글
         frame = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
-        frame.pack(fill=tk.X, padx=20, pady=8)
-        tk.Label(frame, text="소개글 (BIO)", font=ModernStyle.get_font(9),
+        frame.pack(fill=tk.X, padx=20, pady=5)
+        tk.Label(frame, text="소개글 (BIO) - 빈 줄로 단락 구분", font=ModernStyle.get_font(9),
                 bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE).pack(anchor=tk.W)
-        bio = scrolledtext.ScrolledText(frame, height=6, font=ModernStyle.get_font(10),
+        bio = scrolledtext.ScrolledText(frame, height=4, font=ModernStyle.get_font(10),
                                        relief='solid', borderwidth=1)
         bio.insert(tk.END, self.data.get('bio', ''))
         bio.pack(fill=tk.X, pady=(3, 0))
         self.entries['bio'] = bio
+        
+        # === EDUCATION 섹션 ===
+        self._create_editable_section(scrollable, 'education', 'EDUCATION (학력)', self.data['education'])
+        
+        # === EXPERIENCE 섹션 ===
+        self._create_editable_section(scrollable, 'experience', 'EXPERIENCE (경력)', self.data['experience'])
+        
+        # === 연락처 섹션 ===
+        self._create_section_header(scrollable, "연락처 (CONTACT)")
+        
+        for key, label in [('email', '이메일'), ('instagram', '인스타그램 (@username)'), ('studio_location', '스튜디오 위치')]:
+            frame = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
+            frame.pack(fill=tk.X, padx=20, pady=5)
+            tk.Label(frame, text=label, font=ModernStyle.get_font(9),
+                    bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE).pack(anchor=tk.W)
+            entry = tk.Entry(frame, font=ModernStyle.get_font(10), relief='solid', borderwidth=1)
+            entry.insert(0, self.data.get(key, ''))
+            entry.pack(fill=tk.X, pady=(3, 0), ipady=6)
+            self.entries[key] = entry
         
         # 버튼
         btn_frame = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
@@ -1306,6 +1503,76 @@ class AboutEditorDialog(tk.Toplevel):
         tk.Button(btn_frame, text="취소", font=ModernStyle.get_font(10),
                  bg=ModernStyle.BG_WHITE, relief='solid', borderwidth=1,
                  padx=20, pady=8, command=self.destroy).pack(side=tk.LEFT)
+    
+    def _create_section_header(self, parent, title):
+        """섹션 헤더 생성"""
+        frame = tk.Frame(parent, bg=ModernStyle.BG_LIGHT)
+        frame.pack(fill=tk.X, padx=20, pady=(15, 5))
+        tk.Label(frame, text=title, font=ModernStyle.get_font(10, 'bold'),
+                bg=ModernStyle.BG_LIGHT, fg=ModernStyle.TEXT_PRIMARY).pack(anchor=tk.W, padx=10, pady=8)
+    
+    def _create_editable_section(self, parent, section_key, title, items):
+        """편집 가능한 섹션 생성 (EDUCATION, EXPERIENCE, RECOGNITION)"""
+        self._create_section_header(parent, title)
+        
+        container = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        container.pack(fill=tk.X, padx=20, pady=5)
+        
+        # 기존 항목들
+        for item in items:
+            self._add_section_item(container, section_key, item['year'], item['detail'])
+        
+        # 추가 버튼
+        add_btn = tk.Button(container, text="+ 항목 추가", font=ModernStyle.get_font(9),
+                           bg=ModernStyle.BG_WHITE, fg=ModernStyle.ACCENT,
+                           relief='flat', cursor='hand2',
+                           command=lambda c=container, k=section_key: self._add_section_item(c, k, '', ''))
+        add_btn.pack(anchor=tk.W, pady=5)
+        
+        # 저장 참조용
+        setattr(self, f'{section_key}_container', container)
+        setattr(self, f'{section_key}_add_btn', add_btn)
+    
+    def _add_section_item(self, container, section_key, year='', detail=''):
+        """섹션에 항목 추가"""
+        frame = tk.Frame(container, bg=ModernStyle.BG_WHITE)
+        frame.pack(fill=tk.X, pady=3)
+        
+        # 연도 입력
+        year_entry = tk.Entry(frame, font=ModernStyle.get_font(9), width=10, relief='solid', borderwidth=1)
+        year_entry.insert(0, year)
+        year_entry.pack(side=tk.LEFT, padx=(0, 5), ipady=4)
+        
+        # 상세 입력
+        detail_entry = tk.Entry(frame, font=ModernStyle.get_font(9), relief='solid', borderwidth=1)
+        detail_entry.insert(0, detail)
+        detail_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5), ipady=4)
+        
+        # 삭제 버튼
+        del_btn = tk.Button(frame, text="✕", font=ModernStyle.get_font(8),
+                           bg=ModernStyle.BG_WHITE, fg=ModernStyle.DANGER,
+                           relief='flat', cursor='hand2',
+                           command=lambda f=frame, k=section_key: self._remove_section_item(f, k))
+        del_btn.pack(side=tk.LEFT)
+        
+        widget_data = {'frame': frame, 'year': year_entry, 'detail': detail_entry}
+        self.section_widgets[section_key].append(widget_data)
+        
+        # 추가 버튼을 맨 아래로 이동
+        add_btn = getattr(self, f'{section_key}_add_btn', None)
+        if add_btn:
+            add_btn.pack_forget()
+            add_btn.pack(anchor=tk.W, pady=5)
+        
+        return widget_data
+    
+    def _remove_section_item(self, frame, section_key):
+        """섹션에서 항목 제거"""
+        for i, widget_data in enumerate(self.section_widgets[section_key]):
+            if widget_data['frame'] == frame:
+                self.section_widgets[section_key].pop(i)
+                frame.destroy()
+                break
     
     def save(self):
         try:
@@ -1326,7 +1593,13 @@ class AboutEditorDialog(tk.Toplevel):
             content = re.sub(r'<div class="about-text">[\s\S]*?</div>',
                            f'<div class="about-text">\n        {bio_html}\n      </div>', content)
             
-            # 이메일 업데이트 (class 속성 등을 고려한 패턴)
+            # EDUCATION 업데이트
+            content = self._update_info_section(content, 'EDUCATION', 'education')
+            
+            # EXPERIENCE 업데이트
+            content = self._update_info_section(content, 'EXPERIENCE', 'experience')
+            
+            # 이메일 업데이트
             email = self.entries['email'].get().strip()
             content = re.sub(
                 r'(<a\s+href="mailto:)[^"]+("[^>]*class="contact-value"[^>]*>)[^<]+(</a>)',
@@ -1334,11 +1607,19 @@ class AboutEditorDialog(tk.Toplevel):
                 content
             )
             
-            # 인스타그램 업데이트 (INSTAGRAM 라벨 뒤의 contact-value 링크)
+            # 인스타그램 업데이트
             instagram = self.entries['instagram'].get().strip()
             content = re.sub(
                 r'(<span class="contact-label">INSTAGRAM</span>\s*<a[^>]*class="contact-value"[^>]*>)[^<]+(</a>)',
                 f'\\g<1>{instagram}\\g<2>',
+                content
+            )
+            
+            # 스튜디오 위치 업데이트
+            studio = self.entries['studio_location'].get().strip()
+            content = re.sub(
+                r'(<span class="contact-label">STUDIO</span>\s*<span class="contact-value">)[^<]+(</span>)',
+                f'\\g<1>{studio}\\g<2>',
                 content
             )
             
@@ -1349,6 +1630,21 @@ class AboutEditorDialog(tk.Toplevel):
             self.destroy()
         except Exception as e:
             messagebox.showerror("오류", f"저장 실패: {str(e)}")
+    
+    def _update_info_section(self, content, section_name, section_key):
+        """섹션 HTML 업데이트 (한 줄 형식)"""
+        items = []
+        for widget_data in self.section_widgets[section_key]:
+            year = widget_data['year'].get().strip()
+            detail = widget_data['detail'].get().strip()
+            if year or detail:
+                items.append(f'          <li><span class="info-year">{year}</span><span class="info-detail">{detail}</span></li>')
+        
+        items_html = '\n'.join(items) if items else ''
+        
+        pattern = rf'(<h2 class="info-heading">{section_name}</h2>\s*<ul class="info-list">)[\s\S]*?(</ul>)'
+        replacement = f'\\g<1>\n{items_html}\n        \\g<2>'
+        return re.sub(pattern, replacement, content)
 
 
 class PortfolioAdminApp:
@@ -1574,12 +1870,20 @@ class PortfolioAdminApp:
     def load_data(self):
         try:
             with open(self.current_html, 'r', encoding='utf-8') as f:
-                self.projects = self.extract_json(f.read())
+                content = f.read()
+            self.projects = self.extract_json(content)
             self.update_tree()
             self.count_label.config(text=f"{len(self.projects)} items")
             self.status_var.set(f"{len(self.projects)}개 {self.current_mode} 로드됨")
+        except FileNotFoundError:
+            messagebox.showerror("오류", f"파일을 찾을 수 없습니다: {self.current_html}")
+        except json.JSONDecodeError as e:
+            messagebox.showerror("오류", f"JSON 파싱 오류: {e}")
         except Exception as e:
-            messagebox.showerror("오류", f"로드 실패: {e}")
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"로드 오류: {error_detail}")
+            messagebox.showerror("오류", f"로드 실패: {e}\n\n상세: {error_detail[:500]}")
     
     def update_tree(self, filtered=None):
         for item in self.tree.get_children():

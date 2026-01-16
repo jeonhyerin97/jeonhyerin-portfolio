@@ -44,6 +44,9 @@
       }
     }
 
+    // Update archive count dynamically
+    updateArchiveCount();
+
     // Bind grid item clicks
     gridItems.forEach((btn, index) => {
       btn.addEventListener('click', () => openProject(index));
@@ -100,7 +103,18 @@
     });
   }
   
-  // 개별 썸네일 로드
+  // Update archive count based on number of projects
+  function updateArchiveCount() {
+    const archiveCount = document.querySelector('.archive-count');
+    if (archiveCount) {
+      // Count visible grid items
+      const count = gridItems.length;
+      // Format as 2-digit number (01, 02, ... 10, 11, ...)
+      archiveCount.textContent = count.toString().padStart(2, '0');
+    }
+  }
+  
+  // 개별 썸네일 로드 (jpg, webp 모두 지원)
   function loadThumbnail(thumb) {
     const thumbUrl = thumb.dataset.thumb;
     const coverUrl = thumb.dataset.cover;
@@ -110,32 +124,40 @@
       return;
     }
     
-    const img = new Image();
+    // 확장자 변환 함수
+    function getWebpUrl(url) {
+      return url.replace(/\.(jpg|jpeg|png)$/i, '.webp');
+    }
     
-    img.onload = function() {
-      thumb.style.backgroundImage = `url('${thumbUrl}')`;
-      thumb.classList.add('loaded');
-    };
+    // 이미지 로드 시도 순서: thumb.jpg → thumb.webp → cover.jpg → cover.webp
+    const urlsToTry = [];
+    if (thumbUrl) {
+      urlsToTry.push(thumbUrl);
+      urlsToTry.push(getWebpUrl(thumbUrl));
+    }
+    if (coverUrl) {
+      urlsToTry.push(coverUrl);
+      urlsToTry.push(getWebpUrl(coverUrl));
+    }
     
-    img.onerror = function() {
-      // thumb.jpg 실패시 cover.jpg로 fallback
-      if (coverUrl) {
-        const fallbackImg = new Image();
-        fallbackImg.onload = function() {
-          thumb.style.backgroundImage = `url('${coverUrl}')`;
-          thumb.classList.add('loaded');
-        };
-        fallbackImg.onerror = function() {
-          // 둘 다 실패시 placeholder
-          thumb.classList.add('grid-thumb--placeholder', 'loaded');
-        };
-        fallbackImg.src = coverUrl;
-      } else {
+    function tryNextUrl(index) {
+      if (index >= urlsToTry.length) {
         thumb.classList.add('grid-thumb--placeholder', 'loaded');
+        return;
       }
-    };
+      
+      const img = new Image();
+      img.onload = function() {
+        thumb.style.backgroundImage = `url('${urlsToTry[index]}')`;
+        thumb.classList.add('loaded');
+      };
+      img.onerror = function() {
+        tryNextUrl(index + 1);
+      };
+      img.src = urlsToTry[index];
+    }
     
-    img.src = thumbUrl;
+    tryNextUrl(0);
   }
 
   // ============================================
@@ -299,50 +321,76 @@
         </div>
       `;
     }
+    
+    // 커스텀 필드 렌더링
+    if (project.custom_fields && Array.isArray(project.custom_fields)) {
+      project.custom_fields.forEach(field => {
+        if (field.label && field.value) {
+          metaHTML += `
+            <div class="meta-item">
+              <span class="meta-label">${escapeHtml(field.label)}</span>
+              <span class="meta-value">${escapeHtml(field.value)}</span>
+            </div>
+          `;
+        }
+      });
+    }
 
     // Determine image base path
     const imageFolder = isDrawings ? 'images/drawings' : 'images/projects';
     const slug = project.slug || project.title.toLowerCase().replace(/\s+/g, '-');
     const basePath = `${imageFolder}/${slug}`;
 
-    // Generate sub images (01.jpg - 20.jpg) with lazy loading
+    // Generate sub images (01.jpg/webp - 20.jpg/webp) with lazy loading
+    // Try .jpg first, then .webp on error
     let subImagesHTML = '';
     for (let i = 1; i <= 20; i++) {
       const num = i.toString().padStart(2, '0');
       subImagesHTML += `
         <figure class="project-image">
-          <img data-src="${basePath}/${num}.jpg" alt="${escapeHtml(project.title)} sub ${i}" class="lazy-image" onerror="this.parentElement.style.display='none';">
+          <img data-src="${basePath}/${num}.jpg" data-src-webp="${basePath}/${num}.webp" alt="${escapeHtml(project.title)} sub ${i}" class="lazy-image" onerror="if(!this.dataset.triedWebp){this.dataset.triedWebp='1';this.src=this.dataset.srcWebp||this.src.replace('.jpg','.webp');}else{this.parentElement.style.display='none';}">
         </figure>
       `;
     }
 
-    // Generate model images (model_images/1.jpg - model_images/30.jpg) with lazy loading
+    // Generate model images (model_images/1.jpg/webp - 30.jpg/webp) with lazy loading
     let modelImagesHTML = '';
     for (let i = 1; i <= 30; i++) {
       modelImagesHTML += `
         <figure class="model-image" data-model-index="${i}">
-          <img data-src="${basePath}/model_images/${i}.jpg" alt="${escapeHtml(project.title)} model ${i}" class="lazy-image" onerror="this.parentElement.style.display='none';">
+          <img data-src="${basePath}/model_images/${i}.jpg" data-src-webp="${basePath}/model_images/${i}.webp" alt="${escapeHtml(project.title)} model ${i}" class="lazy-image" onerror="if(!this.dataset.triedWebp){this.dataset.triedWebp='1';this.src=this.dataset.srcWebp||this.src.replace('.jpg','.webp');}else{this.parentElement.style.display='none';}">
         </figure>
       `;
     }
 
-    // Generate slide images (slide_images/1.jpg - slide_images/20.jpg) with lazy loading
+    // Generate slide images (slide_images/1.jpg/webp - 20.jpg/webp) with lazy loading
     let slideImagesHTML = '';
     for (let i = 1; i <= 20; i++) {
       slideImagesHTML += `
         <figure class="project-image">
-          <img data-src="${basePath}/slide_images/${i}.jpg" alt="${escapeHtml(project.title)} slide ${i}" class="lazy-image" onerror="this.parentElement.style.display='none';">
+          <img data-src="${basePath}/slide_images/${i}.jpg" data-src-webp="${basePath}/slide_images/${i}.webp" alt="${escapeHtml(project.title)} slide ${i}" class="lazy-image" onerror="if(!this.dataset.triedWebp){this.dataset.triedWebp='1';this.src=this.dataset.srcWebp||this.src.replace('.jpg','.webp');}else{this.parentElement.style.display='none';}">
         </figure>
       `;
     }
 
     // Render full detail - Side-by-side layout: image left, text right
-    // main.jpg를 먼저 시도하고, 없으면 cover.jpg로 fallback
+    // main.jpg → main.webp → cover.jpg → cover.webp 순으로 시도
     detail.innerHTML = `
       <!-- Hero Section: Image Left, Text Right -->
       <div class="project-hero">
         <figure class="project-cover">
-          <img src="${basePath}/main.jpg" alt="${escapeHtml(project.title)} main" class="project-cover-image" onerror="this.src='${basePath}/cover.jpg'; this.onerror=function(){this.style.display='none'; this.parentElement.innerHTML='<div class=\\'image-placeholder project-cover-image\\'></div>';};">
+          <img src="${basePath}/main.jpg" alt="${escapeHtml(project.title)} main" class="project-cover-image" 
+            onerror="
+              var self=this;
+              var tryImages=['${basePath}/main.webp','${basePath}/cover.jpg','${basePath}/cover.webp'];
+              var tryIndex=0;
+              function tryNext(){
+                if(tryIndex>=tryImages.length){self.style.display='none';self.parentElement.innerHTML='<div class=\\'image-placeholder project-cover-image\\'></div>';return;}
+                self.src=tryImages[tryIndex++];
+              }
+              self.onerror=tryNext;
+              tryNext();
+            ">
         </figure>
 
         <div class="project-content">
