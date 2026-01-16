@@ -321,16 +321,22 @@ img {
 .grid-thumb {
   width: 100%;
   height: 100%;
-  background-color: #e8e8e8;
+  background-color: #f0f0f0;
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  transition: transform var(--transition-slow);
+  transition: transform var(--transition-slow), opacity 0.3s ease;
+  opacity: 0;
+}
+
+.grid-thumb.loaded {
+  opacity: 1;
 }
 
 /* Placeholder fallback for missing images */
 .grid-thumb--placeholder {
   background-color: #e8e8e8;
+  opacity: 1;
 }
 
 /* Hover overlay */
