@@ -1172,10 +1172,16 @@ class ProjectEditorDialog(tk.Toplevel):
             messagebox.showwarning("경고", "제목은 필수입니다.")
             return
         
+        # display_title 처리: 비어있거나 이전 title과 같으면 새 title로 설정
+        display_title = self.entries['display_title'].get().strip()
+        old_title = self.project.get('title', '')
+        if not display_title or display_title == old_title:
+            display_title = title
+        
         self.result = {
             'title': title,
             'slug': self.entries['slug'].get().strip() or title.lower().replace(' ', '-').replace('_', '-'),
-            'display_title': self.entries['display_title'].get().strip() or title,
+            'display_title': display_title,
             'display_year': self.entries['display_year'].get().strip(),
             'location': self.entries['location'].get().strip(),
             'duration': self.entries['duration'].get().strip(),
