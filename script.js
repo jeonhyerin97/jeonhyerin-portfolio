@@ -72,27 +72,70 @@
     handleThumbnailFallback();
   }
   
-  // 썸네일 이미지 fallback 처리
+  // 썸네일 이미지 lazy loading + fallback 처리
   function handleThumbnailFallback() {
     const thumbs = document.querySelectorAll('.grid-thumb');
+    
+    // Intersection Observer로 뷰포트에 보일 때만 이미지 로드
+    const observerOptions = {
+      root: null,
+      rootMargin: '100px', // 100px 전에 미리 로드 시작
+      threshold: 0.01
+    };
+    
+    const imageObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const thumb = entry.target;
+          loadThumbnail(thumb);
+          observer.unobserve(thumb);
+        }
+      });
+    }, observerOptions);
+    
     thumbs.forEach(thumb => {
-      const thumbUrl = thumb.dataset.thumb;
-      const coverUrl = thumb.dataset.cover;
-      
-      if (thumbUrl && coverUrl) {
-        // 이미지 로드 테스트
-        const img = new Image();
-        img.onload = function() {
-          // thumb.jpg 로드 성공
-          thumb.style.backgroundImage = `url('${thumbUrl}')`;
-        };
-        img.onerror = function() {
-          // thumb.jpg 실패, cover.jpg로 fallback
-          thumb.style.backgroundImage = `url('${coverUrl}')`;
-        };
-        img.src = thumbUrl;
-      }
+      // 초기에는 배경 이미지 제거 (placeholder만 표시)
+      thumb.style.backgroundImage = 'none';
+      imageObserver.observe(thumb);
     });
+  }
+  
+  // 개별 썸네일 로드
+  function loadThumbnail(thumb) {
+    const thumbUrl = thumb.dataset.thumb;
+    const coverUrl = thumb.dataset.cover;
+    
+    if (!thumbUrl && !coverUrl) {
+      thumb.classList.add('loaded');
+      return;
+    }
+    
+    const img = new Image();
+    
+    img.onload = function() {
+      thumb.style.backgroundImage = `url('${thumbUrl}')`;
+      thumb.classList.add('loaded');
+    };
+    
+    img.onerror = function() {
+      // thumb.jpg 실패시 cover.jpg로 fallback
+      if (coverUrl) {
+        const fallbackImg = new Image();
+        fallbackImg.onload = function() {
+          thumb.style.backgroundImage = `url('${coverUrl}')`;
+          thumb.classList.add('loaded');
+        };
+        fallbackImg.onerror = function() {
+          // 둘 다 실패시 placeholder
+          thumb.classList.add('grid-thumb--placeholder', 'loaded');
+        };
+        fallbackImg.src = coverUrl;
+      } else {
+        thumb.classList.add('grid-thumb--placeholder', 'loaded');
+      }
+    };
+    
+    img.src = thumbUrl;
   }
 
   // ============================================
@@ -262,33 +305,33 @@
     const slug = project.slug || project.title.toLowerCase().replace(/\s+/g, '-');
     const basePath = `${imageFolder}/${slug}`;
 
-    // Generate sub images (01.jpg - 20.jpg)
+    // Generate sub images (01.jpg - 20.jpg) with lazy loading
     let subImagesHTML = '';
     for (let i = 1; i <= 20; i++) {
       const num = i.toString().padStart(2, '0');
       subImagesHTML += `
         <figure class="project-image">
-          <img src="${basePath}/${num}.jpg" alt="${escapeHtml(project.title)} sub ${i}" onerror="this.parentElement.style.display='none';">
+          <img data-src="${basePath}/${num}.jpg" alt="${escapeHtml(project.title)} sub ${i}" class="lazy-image" onerror="this.parentElement.style.display='none';">
         </figure>
       `;
     }
 
-    // Generate model images (model_images/1.jpg - model_images/30.jpg)
+    // Generate model images (model_images/1.jpg - model_images/30.jpg) with lazy loading
     let modelImagesHTML = '';
     for (let i = 1; i <= 30; i++) {
       modelImagesHTML += `
         <figure class="model-image" data-model-index="${i}">
-          <img src="${basePath}/model_images/${i}.jpg" alt="${escapeHtml(project.title)} model ${i}" onerror="this.parentElement.style.display='none';">
+          <img data-src="${basePath}/model_images/${i}.jpg" alt="${escapeHtml(project.title)} model ${i}" class="lazy-image" onerror="this.parentElement.style.display='none';">
         </figure>
       `;
     }
 
-    // Generate slide images (slide_images/1.jpg - slide_images/20.jpg)
+    // Generate slide images (slide_images/1.jpg - slide_images/20.jpg) with lazy loading
     let slideImagesHTML = '';
     for (let i = 1; i <= 20; i++) {
       slideImagesHTML += `
         <figure class="project-image">
-          <img src="${basePath}/slide_images/${i}.jpg" alt="${escapeHtml(project.title)} slide ${i}" onerror="this.parentElement.style.display='none';">
+          <img data-src="${basePath}/slide_images/${i}.jpg" alt="${escapeHtml(project.title)} slide ${i}" class="lazy-image" onerror="this.parentElement.style.display='none';">
         </figure>
       `;
     }
@@ -359,11 +402,40 @@
       </div>
     `;
 
+    // Apply lazy loading to detail images
+    initDetailLazyLoading(detail);
+    
     // Wait for model images to load and adjust grid
     waitForModelImages(detail);
   }
+  
+  // Detail 페이지 이미지 lazy loading
+  function initDetailLazyLoading(container) {
+    const lazyImages = container.querySelectorAll('.lazy-image');
+    
+    const observerOptions = {
+      root: container.closest('.overlay-scroll'),
+      rootMargin: '200px',
+      threshold: 0.01
+    };
+    
+    const lazyObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const img = entry.target;
+          if (img.dataset.src) {
+            img.src = img.dataset.src;
+            img.classList.add('lazy-loaded');
+            observer.unobserve(img);
+          }
+        }
+      });
+    }, observerOptions);
+    
+    lazyImages.forEach(img => lazyObserver.observe(img));
+  }
 
-  // Wait for model images to load then adjust grid
+  // Wait for model images to load then adjust grid (with lazy loading support)
   function waitForModelImages(container) {
     const modelImages = container.querySelectorAll('.model-image img');
     let loadedCount = 0;
@@ -381,26 +453,37 @@
       }
     }
 
+    // 모든 모델 이미지를 즉시 로드 (그리드 계산을 위해)
     modelImages.forEach(img => {
-      if (img.complete) {
-        if (img.naturalWidth > 0) {
-          loadedCount++;
-        } else {
-          errorCount++;
-          img.parentElement.style.display = 'none';
-        }
+      const src = img.dataset.src || img.src;
+      if (!src) {
+        errorCount++;
+        img.parentElement.style.display = 'none';
         checkComplete();
-      } else {
-        img.addEventListener('load', () => {
-          loadedCount++;
-          checkComplete();
-        });
-        img.addEventListener('error', () => {
-          errorCount++;
-          img.parentElement.style.display = 'none';
-          checkComplete();
-        });
+        return;
       }
+      
+      // 이미 로드된 경우
+      if (img.src && img.complete && img.naturalWidth > 0) {
+        loadedCount++;
+        img.classList.add('lazy-loaded');
+        checkComplete();
+        return;
+      }
+      
+      // 새로 로드
+      img.src = src;
+      img.classList.add('lazy-loaded');
+      
+      img.addEventListener('load', () => {
+        loadedCount++;
+        checkComplete();
+      });
+      img.addEventListener('error', () => {
+        errorCount++;
+        img.parentElement.style.display = 'none';
+        checkComplete();
+      });
     });
   }
 

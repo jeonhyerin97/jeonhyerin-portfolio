@@ -99,6 +99,16 @@ img {
   display: block;
 }
 
+/* Lazy loading images */
+.lazy-image {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.lazy-image.lazy-loaded {
+  opacity: 1;
+}
+
 
 /* --- Navigation --- */
 .nav {
