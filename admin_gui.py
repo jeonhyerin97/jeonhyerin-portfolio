@@ -1221,24 +1221,29 @@ class AboutEditorDialog(tk.Toplevel):
             with open(ABOUT_HTML, 'r', encoding='utf-8') as f:
                 content = f.read()
             
+            # 이름
             match = re.search(r'<h1 class="about-name">([^<]+)</h1>', content)
             if match: self.data['name'] = match.group(1)
             
+            # 태그라인
             match = re.search(r'<p class="about-tagline">([^<]+)</p>', content)
             if match: self.data['tagline'] = match.group(1)
             
+            # 소개글
             match = re.search(r'<div class="about-text">([\s\S]*?)</div>', content)
             if match:
                 paragraphs = re.findall(r'<p>([^<]+)</p>', match.group(1))
                 self.data['bio'] = '\n\n'.join(paragraphs)
             
+            # 이메일 (mailto: 링크에서 추출)
             match = re.search(r'href="mailto:([^"]+)"', content)
             if match: self.data['email'] = match.group(1)
             
-            match = re.search(r'INSTAGRAM[\s\S]*?class="contact-value"[^>]*>([^<]+)', content)
+            # 인스타그램 (INSTAGRAM 라벨 뒤의 링크 텍스트)
+            match = re.search(r'<span class="contact-label">INSTAGRAM</span>\s*<a[^>]*class="contact-value"[^>]*>([^<]+)</a>', content)
             if match: self.data['instagram'] = match.group(1).strip()
-        except:
-            pass
+        except Exception as e:
+            print(f"About 데이터 로드 오류: {e}")
     
     def create_ui(self):
         # 스크롤 캔버스
@@ -1301,22 +1306,35 @@ class AboutEditorDialog(tk.Toplevel):
             with open(ABOUT_HTML, 'r', encoding='utf-8') as f:
                 content = f.read()
             
+            # 이름 업데이트
             content = re.sub(r'<h1 class="about-name">[^<]+</h1>',
                            f'<h1 class="about-name">{self.entries["name"].get()}</h1>', content)
+            
+            # 태그라인 업데이트
             content = re.sub(r'<p class="about-tagline">[^<]+</p>',
                            f'<p class="about-tagline">{self.entries["tagline"].get()}</p>', content)
             
+            # 소개글 업데이트
             bio = self.entries['bio'].get('1.0', tk.END).strip()
             bio_html = '\n        '.join([f'<p>{p}</p>' for p in bio.split('\n\n') if p.strip()])
             content = re.sub(r'<div class="about-text">[\s\S]*?</div>',
                            f'<div class="about-text">\n        {bio_html}\n      </div>', content)
             
-            email = self.entries['email'].get()
-            content = re.sub(r'href="mailto:[^"]+">([^<]+)</a>',
-                           f'href="mailto:{email}">{email}</a>', content)
+            # 이메일 업데이트 (class 속성 등을 고려한 패턴)
+            email = self.entries['email'].get().strip()
+            content = re.sub(
+                r'(<a\s+href="mailto:)[^"]+("[^>]*class="contact-value"[^>]*>)[^<]+(</a>)',
+                f'\\g<1>{email}\\g<2>{email}\\g<3>', 
+                content
+            )
             
-            content = re.sub(r'(INSTAGRAM[\s\S]*?class="contact-value"[^>]*>)[^<]+',
-                           f'\\1{self.entries["instagram"].get()}', content)
+            # 인스타그램 업데이트 (INSTAGRAM 라벨 뒤의 contact-value 링크)
+            instagram = self.entries['instagram'].get().strip()
+            content = re.sub(
+                r'(<span class="contact-label">INSTAGRAM</span>\s*<a[^>]*class="contact-value"[^>]*>)[^<]+(</a>)',
+                f'\\g<1>{instagram}\\g<2>',
+                content
+            )
             
             with open(ABOUT_HTML, 'w', encoding='utf-8') as f:
                 f.write(content)
