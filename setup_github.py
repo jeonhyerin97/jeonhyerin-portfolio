@@ -44,6 +44,23 @@ def main():
     print("="*60)
     print()
     
+    # Git 저장소 초기화 확인
+    git_dir = SCRIPT_DIR / ".git"
+    if not git_dir.exists():
+        print("[0/5] Git 저장소 초기화 중...")
+        success, _, _ = run_git("init")
+        if success:
+            print("✓ Git 저장소가 초기화되었습니다.")
+        else:
+            print("✗ Git 초기화 실패!")
+            return
+        
+        # 첫 커밋 생성
+        print("\n[0.5/5] 첫 커밋 생성 중...")
+        run_git("add", "-A")
+        run_git("commit", "-m", "Initial commit: JEONHYERIN Portfolio")
+        print()
+    
     # 현재 상태 확인
     print("[1/5] 현재 Git 상태 확인...")
     run_git("status", "--short")

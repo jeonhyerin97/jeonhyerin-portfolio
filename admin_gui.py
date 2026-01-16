@@ -312,6 +312,16 @@ class GitAutomation:
         git_dir = self.repo_path / ".git"
         return git_dir.exists()
     
+    def init_repo(self):
+        """Git 저장소 초기화"""
+        success, stdout, stderr = self._run_git('init')
+        return success, stdout or stderr
+    
+    def has_remote(self):
+        """원격 저장소가 설정되어 있는지 확인"""
+        success, stdout, _ = self._run_git('remote', '-v')
+        return success and len(stdout.strip()) > 0
+    
     def has_changes(self):
         """변경사항이 있는지 확인"""
         success, stdout, _ = self._run_git('status', '--porcelain')
@@ -1741,16 +1751,39 @@ class PortfolioAdminApp:
             # 3. Git 자동화
             git = GitAutomation(SCRIPT_DIR)
             
-            # Git 저장소 확인
+            # Git 저장소 확인 - 없으면 자동 초기화
             if not git.is_git_repo():
-                messagebox.showwarning("Git 없음", 
-                    "❌ Git 저장소가 아닙니다.\n\n"
-                    "로컬 저장은 완료되었지만,\n"
-                    "자동 배포를 사용하려면 Git 저장소를 초기화하세요.\n\n"
-                    "터미널에서:\n"
-                    "  git init\n"
-                    "  git remote add origin <your-repo-url>")
-                self.status_var.set("✅ 로컬 저장 완료 (Git 없음)")
+                self.status_var.set("🔧 Git 저장소 초기화 중...")
+                self.root.update()
+                
+                success, msg = git.init_repo()
+                if not success:
+                    messagebox.showerror("Git 초기화 실패", f"Git 저장소 초기화 실패:\n{msg}")
+                    return
+                
+                # 첫 커밋 생성
+                git.add_all()
+                git.commit("Initial commit: JEONHYERIN Portfolio")
+                self.status_var.set("✅ Git 저장소 초기화 완료")
+                self.root.update()
+            
+            # 원격 저장소 확인
+            if not git.has_remote():
+                result = messagebox.askyesno("GitHub 연결 필요", 
+                    "⚠️ GitHub 원격 저장소가 연결되지 않았습니다.\n\n"
+                    "로컬 저장은 완료되었습니다.\n\n"
+                    "GitHub 연결 스크립트(setup_github.py)를\n"
+                    "실행하시겠습니까?\n\n"
+                    "💡 GitHub 저장소 URL이 필요합니다.\n"
+                    "   예: https://github.com/username/repo.git")
+                
+                if result:
+                    # setup_github.py 실행
+                    import subprocess
+                    subprocess.Popen(['python', str(SCRIPT_DIR / 'setup_github.py')], 
+                                   creationflags=subprocess.CREATE_NEW_CONSOLE)
+                
+                self.status_var.set("✅ 로컬 저장 완료 (GitHub 연결 필요)")
                 return
             
             # 4. 변경사항 커밋 및 푸시
