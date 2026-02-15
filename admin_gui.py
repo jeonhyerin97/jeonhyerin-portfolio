@@ -412,6 +412,30 @@ class GitAutomation:
         """커밋 생성"""
         success, stdout, stderr = self._run_git('commit', '-m', message)
         return success, stdout or stderr
+
+    @staticmethod
+    def _join_git_output(*parts):
+        return "\n".join([p for p in parts if p])
+
+    @staticmethod
+    def _is_upstream_error(message):
+        text = (message or "").lower()
+        return (
+            "no upstream branch" in text
+            or "has no upstream branch" in text
+            or "--set-upstream" in text
+        )
+
+    @staticmethod
+    def _is_non_fast_forward_error(message):
+        text = (message or "").lower()
+        return (
+            "fetch first" in text
+            or "non-fast-forward" in text
+            or "failed to push some refs" in text
+            or "updates were rejected" in text
+            or "rejected" in text
+        )
     
     def push(self):
         """원격 저장소에 푸시"""
@@ -419,16 +443,55 @@ class GitAutomation:
         if success:
             return True, stdout or stderr
 
-        # 업스트림이 없는 첫 푸시 케이스를 자동 처리
         branch = self.get_current_branch()
-        if branch and branch != "unknown":
+        if not branch or branch == "unknown":
+            return False, stdout or stderr
+
+        detail = self._join_git_output(stderr, stdout)
+
+        # 1) 업스트림 미설정이면 먼저 -u 푸시 시도
+        if self._is_upstream_error(detail):
             up_success, up_stdout, up_stderr = self._run_git('push', '-u', 'origin', branch)
             if up_success:
                 return True, up_stdout or up_stderr
-            detail = "\n".join([p for p in [stderr, up_stderr, up_stdout] if p])
-            return False, detail
+            detail = self._join_git_output(detail, up_stderr, up_stdout)
 
-        return False, stdout or stderr
+        # 2) fetch first / non-fast-forward면 pull --rebase 후 재시도
+        if self._is_non_fast_forward_error(detail):
+            pull_success, pull_stdout, pull_stderr = self._run_git('pull', '--rebase', 'origin', branch)
+            pull_detail = self._join_git_output(pull_stderr, pull_stdout)
+
+            if (
+                not pull_success
+                and "refusing to merge unrelated histories" in (pull_detail or "").lower()
+            ):
+                pull_success, pull_stdout, pull_stderr = self._run_git(
+                    'pull', '--rebase', '--allow-unrelated-histories', 'origin', branch
+                )
+                pull_detail = self._join_git_output(pull_stderr, pull_stdout)
+
+            if pull_success:
+                retry_success, retry_stdout, retry_stderr = self._run_git('push', '-u', 'origin', branch)
+                if retry_success:
+                    return True, retry_stdout or retry_stderr
+                detail = self._join_git_output(detail, pull_detail, retry_stderr, retry_stdout)
+            else:
+                # rebase 충돌 상태가 남으면 정리 후 마지막 대안 진행
+                self._run_git('rebase', '--abort')
+                detail = self._join_git_output(detail, pull_detail)
+
+            # 3) 마지막 대안: 원격 이력을 덮어쓰되 lease 보호 사용
+            self._run_git('fetch', 'origin', branch)
+            force_success, force_stdout, force_stderr = self._run_git(
+                'push', '-u', 'origin', branch, '--force-with-lease'
+            )
+            if force_success:
+                force_msg = force_stdout or force_stderr or ""
+                notice = "원격 이력 충돌로 force-with-lease 푸시를 수행했습니다."
+                return True, self._join_git_output(force_msg, notice)
+            detail = self._join_git_output(detail, force_stderr, force_stdout)
+
+        return False, detail
     
     def get_current_branch(self):
         """현재 브랜치 이름 반환"""
@@ -6114,9 +6177,9 @@ class PortfolioAdminApp:
                      bg=ModernStyle.BG_WHITE, relief='solid', borderwidth=1,
                      padx=12, pady=8, command=cmd).pack(side=tk.LEFT, padx=3)
         
-        tk.Button(right, text="모바일 미리보기", font=ModernStyle.get_font(10),
+        tk.Button(right, text="모바일", font=ModernStyle.get_font(10),
                  bg=ModernStyle.BG_WHITE, relief='solid', borderwidth=1,
-                 width=12, padx=8, pady=8, command=self.open_mobile_preview).pack(side=tk.LEFT, padx=3)
+                 width=8, padx=8, pady=8, command=self.open_mobile_preview).pack(side=tk.LEFT, padx=3)
         
         # 상태바
         status = tk.Frame(main, bg=ModernStyle.BG_LIGHT)
