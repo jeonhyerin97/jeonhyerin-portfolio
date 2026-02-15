@@ -1,0 +1,13 @@
+{
+  "subtitle": "Architecture Portfolio",
+  "name": "JEONHYERIN",
+  "quote_text": "I'm not inventing anything new.\nI'm just using existing materials\nin a different way.",
+  "quote_author": "Shigeru Ban",
+  "focus": "Design, Architecture,\nAI, Computer",
+  "education": "Yonsei Univ.",
+  "contact_email": "contact@jeonhyerin.com",
+  "hero_image": "images/home/hero.png",
+  "hero_image_size": 39,
+  "hero_image_opacity": 100,
+  "hero_image_position": "center"
+}

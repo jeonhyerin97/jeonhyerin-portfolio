@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+KakaoTalk_*.jpg
+
+# Test files
+test_*.py
+
+# Local development
+.env
+.env.local
+
+# Backup files (keep in backups/ folder only)
+*_backup.html

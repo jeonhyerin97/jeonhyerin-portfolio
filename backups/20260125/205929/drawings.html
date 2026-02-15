@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DRAWINGS — JEONHYERIN</title>
+  
+  <!-- Google Fonts - Archivo -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&display=swap" rel="stylesheet">
+  
+  <!-- Pretendard (Korean font) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="page-archive">
+  
+  <!-- Fixed navigation -->
+  <nav class="nav nav--archive" aria-label="Main navigation">
+    <div class="nav-inner">
+      <a href="index.html" class="nav-logo">JEONHYERIN</a>
+      <div class="nav-links">
+        <a href="projects.html" class="nav-link">PROJECTS</a>
+        <a href="drawings.html" class="nav-link nav-link--active">DRAWINGS</a>
+        <a href="about.html" class="nav-link">ABOUT</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Archive Grid -->
+  <main class="archive">
+    <header class="archive-header">
+      <h1 class="archive-title">DRAWINGS</h1>
+      <span class="archive-count">04</span>
+    </header>
+
+    <div class="archive-grid" role="list">
+
+      <article class="grid-item" data-project="0">
+        <button class="grid-item-btn" aria-haspopup="dialog">
+          <div class="grid-item-image">
+            <div class="grid-thumb" data-thumb="images/drawings/urban-fragments/thumb.jpg" data-cover="images/drawings/urban-fragments/cover.jpg" style="background-image: url('images/drawings/urban-fragments/thumb.jpg');"></div>
+          </div>
+          <div class="grid-item-overlay">
+            <span class="grid-item-title">URBAN FRAGMENTS</span>
+            <span class="grid-item-year"></span>
+          </div>
+        </button>
+      </article>
+
+      <article class="grid-item" data-project="1">
+        <button class="grid-item-btn" aria-haspopup="dialog">
+          <div class="grid-item-image">
+            <div class="grid-thumb" data-thumb="images/drawings/section-studies/thumb.jpg" data-cover="images/drawings/section-studies/cover.jpg" style="background-image: url('images/drawings/section-studies/thumb.jpg');"></div>
+          </div>
+          <div class="grid-item-overlay">
+            <span class="grid-item-title">SECTION STUDIES</span>
+            <span class="grid-item-year"></span>
+          </div>
+        </button>
+      </article>
+
+      <article class="grid-item" data-project="2">
+        <button class="grid-item-btn" aria-haspopup="dialog">
+          <div class="grid-item-image">
+            <div class="grid-thumb" data-thumb="images/drawings/material-explorations/thumb.jpg" data-cover="images/drawings/material-explorations/cover.jpg" style="background-image: url('images/drawings/material-explorations/thumb.jpg');"></div>
+          </div>
+          <div class="grid-item-overlay">
+            <span class="grid-item-title">MATERIAL EXPLORATIONS</span>
+            <span class="grid-item-year"></span>
+          </div>
+        </button>
+      </article>
+
+      <article class="grid-item" data-project="3">
+        <button class="grid-item-btn" aria-haspopup="dialog">
+          <div class="grid-item-image">
+            <div class="grid-thumb" data-thumb="images/drawings/threshold-diagrams/thumb.jpg" data-cover="images/drawings/threshold-diagrams/cover.jpg" style="background-image: url('images/drawings/threshold-diagrams/thumb.jpg');"></div>
+          </div>
+          <div class="grid-item-overlay">
+            <span class="grid-item-title">THRESHOLD DIAGRAMS</span>
+            <span class="grid-item-year"></span>
+          </div>
+        </button>
+      </article>
+
+    </div>
+  </main>
+
+  <!-- Site Footer -->
+  <footer class="site-footer">
+    <div class="site-footer-inner">
+      <span class="site-footer-text">JEONHYERIN © 2026 All rights reserved.</span>
+    </div>
+  </footer>
+
+  <!-- Project detail overlay/modal -->
+  <div class="overlay" id="projectOverlay" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="overlay-backdrop"></div>
+    <div class="overlay-content">
+      <button class="overlay-close" aria-label="Close detail view">
+        <span class="close-icon"></span>
+      </button>
+
+      <div class="overlay-scroll">
+        <!-- 동적으로 렌더링됨 (script.js) -->
+        <article class="project-detail"></article>
+      </div>
+
+      <!-- Overlay navigation -->
+      <nav class="overlay-nav" aria-label="Drawing navigation">
+        <button class="overlay-nav-btn overlay-nav-prev" aria-label="Previous drawing">
+          <span>PREV</span>
+        </button>
+        <button class="overlay-nav-btn overlay-nav-top" aria-label="Scroll to top">
+          <span class="arrow-up-icon"></span>
+        </button>
+        <button class="overlay-nav-btn overlay-nav-next" aria-label="Next drawing">
+          <span>NEXT</span>
+        </button>
+      </nav>
+
+    </div>
+  </div>
+
+  <!-- Drawings data -->
+  <script type="application/json" id="projectsData">
+  [
+    {
+        "id": 1,
+        "index": "01",
+        "slug": "urban-fragments",
+        "title": "URBAN FRAGMENTS",
+        "year": "2025",
+        "medium": "Graphite on Paper",
+        "series": "12 Drawings",
+        "description": "A series of analytical drawings examining the layered urban fabric of Seoul's historic districts. Each drawing isolates specific architectural and spatial conditions—thresholds, voids, and material transitions—abstracting them into a visual taxonomy of urban form."
+    },
+    {
+        "id": 2,
+        "index": "02",
+        "slug": "section-studies",
+        "title": "SECTION STUDIES",
+        "year": "2024",
+        "medium": "Ink and Digital",
+        "series": "8 Drawings",
+        "description": "Sectional investigations of proposed and built projects, exploring the vertical relationships between program, structure, and envelope. These drawings reveal the hidden spatial logics that govern architectural experience."
+    },
+    {
+        "id": 3,
+        "index": "03",
+        "slug": "material-explorations",
+        "title": "MATERIAL EXPLORATIONS",
+        "year": "2023",
+        "medium": "Mixed Media",
+        "series": "6 Drawings",
+        "description": "A study of material assemblies through close observation and representation. Each drawing examines the junction conditions between different materials—stone meeting timber, glass meeting steel—documenting the craft of architectural detailing."
+    },
+    {
+        "id": 4,
+        "index": "04",
+        "slug": "threshold-diagrams",
+        "title": "THRESHOLD DIAGRAMS",
+        "year": "2022",
+        "medium": "Graphite on Vellum",
+        "series": "15 Drawings",
+        "description": "Diagrammatic drawings analyzing the spatial conditions of entry and transition in Korean traditional architecture. The series traces the subtle choreography of movement through courtyards, gates, and rooms."
+    }
+]
+  </script>
+
+  <script src="script.js"></script>
+</body>
+</html>

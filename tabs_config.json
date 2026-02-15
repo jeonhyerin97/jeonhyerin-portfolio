@@ -1,0 +1,30 @@
+[
+  {
+    "id": "projects",
+    "name": "PROJECTS",
+    "file": "projects.html",
+    "visible": true,
+    "order": 0
+  },
+  {
+    "id": "drawings",
+    "name": "DRAWINGS",
+    "file": "drawings.html",
+    "visible": true,
+    "order": 1
+  },
+  {
+    "id": "graphics",
+    "name": "GRAPHICS",
+    "file": "graphics.html",
+    "visible": true,
+    "order": 2
+  },
+  {
+    "id": "study",
+    "name": "STUDY",
+    "file": "study.html",
+    "visible": true,
+    "order": 3
+  }
+]

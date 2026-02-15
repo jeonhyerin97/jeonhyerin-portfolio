@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DRAWINGS — JEONHYERIN</title>
+  
+  <!-- Google Fonts - Archivo -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&display=swap" rel="stylesheet">
+  
+  <!-- Pretendard (Korean font) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="page-archive">
+  
+  <!-- Fixed navigation -->
+  <nav class="nav nav--archive" aria-label="Main navigation">
+    <div class="nav-inner">
+      <a href="index.html" class="nav-logo">JEONHYERIN</a>
+      <div class="nav-links">
+        <a href="projects.html" class="nav-link">PROJECTS</a>
+        <a href="drawings.html" class="nav-link nav-link--active">DRAWINGS</a>
+        <a href="graphics.html" class="nav-link">GRAPHICS</a>
+        <a href="study.html" class="nav-link">STUDY</a>
+
+        <a href="about.html" class="nav-link">ABOUT</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Archive Grid -->
+  <main class="archive">
+    <header class="archive-header">
+      <h1 class="archive-title">DRAWINGS</h1>
+      <span class="archive-count">04</span>
+    </header>
+
+    <div class="archive-grid" role="list">
+
+      <article class="grid-item reveal-image" data-project="0">
+        <button class="grid-item-btn" aria-haspopup="dialog">
+          <div class="grid-item-image">
+            <div class="grid-thumb" data-thumb="images/drawings/JuunJ/thumb.jpg" data-cover="images/drawings/JuunJ/cover.jpg" style="background-image: url('images/drawings/JuunJ/thumb.jpg');"></div>
+          </div>
+          <div class="grid-item-overlay">
+            <span class="grid-item-title">JuunJ</span>
+            <span class="grid-item-year">2024</span>
+          </div>
+        </button>
+      </article>
+
+      <article class="grid-item reveal-image" data-project="1">
+        <button class="grid-item-btn" aria-haspopup="dialog">
+          <div class="grid-item-image">
+            <div class="grid-thumb" data-thumb="images/drawings/section-studies/thumb.jpg" data-cover="images/drawings/section-studies/cover.jpg" style="background-image: url('images/drawings/section-studies/thumb.jpg');"></div>
+          </div>
+          <div class="grid-item-overlay">
+            <span class="grid-item-title">SECTION STUDIES</span>
+            <span class="grid-item-year"></span>
+          </div>
+        </button>
+      </article>
+
+      <article class="grid-item reveal-image" data-project="2">
+        <button class="grid-item-btn" aria-haspopup="dialog">
+          <div class="grid-item-image">
+            <div class="grid-thumb" data-thumb="images/drawings/material-explorations/thumb.jpg" data-cover="images/drawings/material-explorations/cover.jpg" style="background-image: url('images/drawings/material-explorations/thumb.jpg');"></div>
+          </div>
+          <div class="grid-item-overlay">
+            <span class="grid-item-title">MATERIAL EXPLORATIONS</span>
+            <span class="grid-item-year"></span>
+          </div>
+        </button>
+      </article>
+
+      <article class="grid-item reveal-image" data-project="3">
+        <button class="grid-item-btn" aria-haspopup="dialog">
+          <div class="grid-item-image">
+            <div class="grid-thumb" data-thumb="images/drawings/MONTANA/thumb.jpg" data-cover="images/drawings/MONTANA/cover.jpg" style="background-image: url('images/drawings/MONTANA/thumb.jpg');"></div>
+          </div>
+          <div class="grid-item-overlay">
+            <span class="grid-item-title">MONTANA</span>
+            <span class="grid-item-year">2025</span>
+          </div>
+        </button>
+      </article>
+
+    </div>
+  </main>
+
+  <!-- Project detail overlay/modal -->
+  <div class="overlay" id="projectOverlay" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="overlay-backdrop"></div>
+    <div class="overlay-content">
+      <button class="overlay-close" aria-label="Close detail view">
+        <span class="close-icon"></span>
+      </button>
+
+      <div class="overlay-scroll">
+        <!-- 동적으로 렌더링됨 (script.js) -->
+        <article class="project-detail"></article>
+      </div>
+
+      <!-- Overlay navigation -->
+      <nav class="overlay-nav" aria-label="Drawing navigation">
+        <button class="overlay-nav-btn overlay-nav-prev" aria-label="Previous drawing">
+          <span>PREV</span>
+        </button>
+        <button class="overlay-nav-btn overlay-nav-top" aria-label="Scroll to top">
+          <span class="arrow-up-icon"></span>
+        </button>
+        <button class="overlay-nav-btn overlay-nav-next" aria-label="Next drawing">
+          <span>NEXT</span>
+        </button>
+      </nav>
+
+    </div>
+  </div>
+
+  <!-- Site Footer -->
+  <footer class="site-footer">
+    <div class="site-footer-inner">
+      
+      <div class="footer-header">
+        <div class="footer-logo">JEONHYERIN</div>
+        <p class="footer-description">
+          This portfolio documents architectural explorations that question conventional spatial relationships. Through rigorous investigation and material experimentation, each project seeks to reveal the poetic potential hidden within structural necessities and programmatic constraints.
+        </p>
+      </div>
+      
+      <hr class="footer-divider">
+      
+      <div class="footer-columns">
+        <div class="footer-column-left">
+          <div class="footer-projects-wrapper">
+            <h3 class="footer-section-title">PROJECTS</h3>
+            <nav class="footer-projects" id="footerProjectList">
+              <!-- 동적으로 렌더링됨 -->
+            </nav>
+          </div>
+        </div>
+        
+        <div class="footer-column-center">
+          <div class="footer-projects-wrapper">
+            <h3 class="footer-section-title">DRAWINGS</h3>
+            <nav class="footer-projects" id="footerDrawingList">
+              <!-- 동적으로 렌더링됨 -->
+            </nav>
+          </div>
+        </div>
+        
+        <div class="footer-column-right">
+          <div class="footer-projects-wrapper">
+            <h3 class="footer-section-title">GRAPHICS</h3>
+            <nav class="footer-projects" id="footerGraphicList">
+              <!-- 동적으로 렌더링됨 -->
+            </nav>
+          </div>
+        </div>
+      </div>
+      
+      <hr class="footer-divider">
+      
+      <div class="footer-bottom">
+        <p class="footer-copyright">
+          © 2026 JEONHYERIN. All rights reserved. The material on this site may not be reproduced, distributed, transmitted, cached or otherwise used, except with the prior written permission of the author.
+        </p>
+        <div class="footer-social">
+          <a href="mailto:rnaakfn123@gmail.com" class="footer-social-link" aria-label="Email">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
+          </a>
+          <a href="https://www.instagram.com/herisharch/" class="footer-social-link" target="_blank" rel="noopener" aria-label="Instagram">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+          </a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Drawings data -->
+  <script type="application/json" id="projectsData">
+  [
+    {
+        "id": 1,
+        "index": "01",
+        "slug": "JuunJ",
+        "title": "JuunJ",
+        "year": "2025",
+        "medium": "Graphite on Paper",
+        "series": "12 Drawings",
+        "description": "A series of analytical drawings examining the layered urban fabric of Seoul's historic districts. Each drawing isolates specific architectural and spatial conditions—thresholds, voids, and material transitions—abstracting them into a visual taxonomy of urban form.",
+        "cover_position": "center center",
+        "cover_ratio": "1594:1150",
+        "display_title": "JuunJ",
+        "display_year": "2024",
+        "location": "",
+        "duration": "",
+        "program": "",
+        "studio": "",
+        "visible": true,
+        "model_cols": "3",
+        "show_slides": true,
+        "cover_zoom": 1.0,
+        "custom_fields": []
+    },
+    {
+        "id": 2,
+        "index": "02",
+        "slug": "section-studies",
+        "title": "SECTION STUDIES",
+        "year": "2024",
+        "medium": "Ink and Digital",
+        "series": "8 Drawings",
+        "description": "Sectional investigations of proposed and built projects, exploring the vertical relationships between program, structure, and envelope. These drawings reveal the hidden spatial logics that govern architectural experience.",
+        "cover_ratio": "1402:2000",
+        "display_title": "SECTION STUDIES",
+        "display_year": "",
+        "location": "",
+        "duration": "",
+        "program": "",
+        "studio": "",
+        "visible": true,
+        "model_cols": "3",
+        "show_slides": true,
+        "cover_position": "center center",
+        "cover_zoom": 1.0,
+        "custom_fields": []
+    },
+    {
+        "id": 3,
+        "index": "03",
+        "slug": "material-explorations",
+        "title": "MATERIAL EXPLORATIONS",
+        "year": "2023",
+        "medium": "Mixed Media",
+        "series": "6 Drawings",
+        "description": "A study of material assemblies through close observation and representation. Each drawing examines the junction conditions between different materials—stone meeting timber, glass meeting steel—documenting the craft of architectural detailing.",
+        "cover_ratio": "1104:1625",
+        "display_title": "MATERIAL EXPLORATIONS",
+        "display_year": "",
+        "location": "",
+        "duration": "",
+        "program": "",
+        "studio": "",
+        "visible": true,
+        "model_cols": "3",
+        "show_slides": true,
+        "cover_position": "center center",
+        "cover_zoom": 1.0,
+        "custom_fields": []
+    },
+    {
+        "id": 4,
+        "index": "04",
+        "slug": "MONTANA",
+        "title": "MONTANA",
+        "year": "2022",
+        "medium": "Graphite on Vellum",
+        "series": "15 Drawings",
+        "description": "Diagrammatic drawings analyzing the spatial conditions of entry and transition in Korean traditional architecture. The series traces the subtle choreography of movement through courtyards, gates, and rooms.",
+        "cover_ratio": "1663:1179",
+        "display_title": "MONTANA",
+        "display_year": "2025",
+        "location": "",
+        "duration": "",
+        "program": "",
+        "studio": "",
+        "visible": true,
+        "model_cols": "3",
+        "show_slides": true,
+        "cover_position": "center center",
+        "cover_zoom": 1.0,
+        "custom_fields": []
+    }
+]
+  </script>
+
+  <script type="application/json" id="footerData">{"projects": [{"title": "MONTANA HANNAM", "visible": true}, {"title": "SOFT CONCRETE", "visible": true}, {"title": "AGING IN PLACE", "visible": true}, {"title": "RE:MAIN", "visible": true}, {"title": "YELLOW STOP", "visible": true}, {"title": "HIDDEN EXHIBITION", "visible": true}, {"title": "THE ANTS AND THE ALLEY", "visible": true}, {"title": "MATERIAL VILLIAGE", "visible": true}, {"title": "CASA DAS CANOAS", "visible": true}], "drawings": [{"title": "JuunJ", "visible": true}, {"title": "SECTION STUDIES", "visible": true}, {"title": "MATERIAL EXPLORATIONS", "visible": true}, {"title": "MONTANA", "visible": true}], "graphics": [{"title": "SEQUENCE", "visible": true}]}</script>
+
+  <script src="script.js"></script>
+</body>
+</html>

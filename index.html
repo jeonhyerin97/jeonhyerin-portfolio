@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JEONHYERIN — Architecture Portfolio</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="page-index page-index--split">
+  
+  <!-- Main Container -->
+  <div class="split-container">
+    
+    <!-- Top: Black Section with Hero Image -->
+    <header class="split-header">
+      <div class="split-hero-image">
+        <img src="images/home/hero.png" alt="Hero" class="split-hero-img" 
+             onerror="this.src='images/home/main_page_image.png'; this.onerror=null;">
+      </div>
+      <div class="split-hero-text">
+        <h1 class="split-hero-title">
+          <a href="projects.html" class="split-hero-title-link">J—HR</a>
+        </h1>
+        <p class="split-hero-slogan">DESIGN ANYTHING</p>
+        <p class="split-hero-focus">architecture, graphic, spatial thinking</p>
+      </div>
+    </header>
+    
+    <!-- Bottom: Black Section with Content -->
+    <main class="split-content">
+      
+      <!-- Title -->
+      <h1 class="split-title">JEONHYERIN</h1>
+      
+      <!-- Subtitle -->
+      <p class="split-subtitle">ARCHITECTURE PORTFOLIO</p>
+      
+      <!-- Info -->
+      <div class="split-info">
+        <p class="split-info-item">Seoul, Korea</p>
+        <p class="split-info-item">rnaakfn123@gmail.com</p>
+      </div>
+      
+      <!-- Navigation - Right aligned, no borders -->
+      <nav class="split-nav">
+        <a href="projects.html" class="split-nav-item">
+          <span class="split-nav-title">Projects</span>
+          <span class="split-nav-count">09</span>
+        </a>
+        <a href="drawings.html" class="split-nav-item">
+          <span class="split-nav-title">Drawings</span>
+          <span class="split-nav-count">04</span>
+        </a>
+        <a href="graphics.html" class="split-nav-item">
+          <span class="split-nav-title">Graphics</span>
+          <span class="split-nav-count">01</span>
+        </a>
+        <a href="about.html" class="split-nav-item">
+          <span class="split-nav-title">About</span>
+          <span class="split-nav-count">→</span>
+        </a>
+      </nav>
+      
+      <!-- Summary -->
+      <div class="split-summary">
+        <div class="split-summary-row">
+          <span class="split-summary-label">FOCUS</span>
+          <span class="split-summary-value">Architecture · AI · Problem Solving</span>
+        </div>
+        <div class="split-summary-row">
+          <span class="split-summary-label">EDUCATION</span>
+          <span class="split-summary-value">Yonsei University</span>
+        </div>
+      </div>
+      
+      <!-- Footer Tag -->
+      <div class="split-footer-tag">
+        <span class="split-tag">2026</span>
+        <span class="split-year">PORTFOLIO</span>
+      </div>
+      
+    </main>
+    
+  </div>
+  
+  <script>
+    // 페이지 로드 애니메이션
+    document.addEventListener('DOMContentLoaded', () => {
+      document.body.classList.add('loaded');
+    });
+  </script>
+
+  <script src="script.js"></script>
+</body>
+</html>
