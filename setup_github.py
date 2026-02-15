@@ -9,7 +9,7 @@ GitHub 원격 저장소 연결 스크립트
 2. GitHub 저장소 URL을 입력합니다
 3. 자동으로 연결 및 첫 푸시가 진행됩니다
 
-예시 URL: https://github.com/your-username/jeonhyerin-portfolio.git
+기본 URL: https://github.com/jeonhyerin97/jeonhyerin-portfolio
 """
 
 import subprocess
@@ -18,6 +18,7 @@ from pathlib import Path
 
 # Git 실행 파일 경로
 GIT_PATH = r"C:\Program Files\Git\cmd\git.exe"
+DEFAULT_GITHUB_URL = "https://github.com/jeonhyerin97/jeonhyerin-portfolio"
 
 # 현재 스크립트 위치
 SCRIPT_DIR = Path(__file__).parent
@@ -83,13 +84,10 @@ def main():
     
     # GitHub URL 입력
     print("[3/5] GitHub 저장소 URL 입력")
-    print("예시: https://github.com/your-username/jeonhyerin-portfolio.git")
+    print(f"기본값: {DEFAULT_GITHUB_URL}")
+    print("Enter를 누르면 기본값이 사용됩니다.")
     print()
-    github_url = input("GitHub URL: ").strip()
-    
-    if not github_url:
-        print("URL이 입력되지 않았습니다. 종료합니다.")
-        return
+    github_url = input("GitHub URL: ").strip() or DEFAULT_GITHUB_URL
     
     if not github_url.endswith('.git'):
         github_url += '.git'

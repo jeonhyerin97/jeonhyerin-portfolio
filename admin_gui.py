@@ -46,6 +46,7 @@ IMAGES_DIR = SCRIPT_DIR / "images"
 HOME_IMAGES_DIR = IMAGES_DIR / "home"
 BACKUP_DIR = SCRIPT_DIR / "backups"
 BACKUP_METADATA_FILES = {"VERSION.txt", "CHANGELOG.md", "SELECTED.txt"}
+DEFAULT_GITHUB_REPO_URL = "https://github.com/jeonhyerin97/jeonhyerin-portfolio"
 
 
 def get_backup_target_map():
@@ -361,6 +362,32 @@ class GitAutomation:
         """원격 저장소가 설정되어 있는지 확인"""
         success, stdout, _ = self._run_git('remote', '-v')
         return success and len(stdout.strip()) > 0
+
+    @staticmethod
+    def _normalize_remote_url(url):
+        """URL 비교를 위한 정규화 (.git, 슬래시 차이 무시)"""
+        normalized = url.strip().rstrip('/')
+        if normalized.endswith('.git'):
+            normalized = normalized[:-4]
+        return normalized
+
+    def get_remote_url(self, remote_name='origin'):
+        """원격 저장소 URL 조회"""
+        success, stdout, _ = self._run_git('remote', 'get-url', remote_name)
+        if success:
+            return stdout.strip()
+        return None
+
+    def ensure_remote(self, expected_url, remote_name='origin'):
+        """원격 저장소를 expected_url로 보정 (없으면 추가, 있으면 set-url)"""
+        current_url = self.get_remote_url(remote_name)
+        if current_url:
+            if self._normalize_remote_url(current_url) == self._normalize_remote_url(expected_url):
+                return True, f"{remote_name} 연결 확인됨: {current_url}"
+            success, stdout, stderr = self._run_git('remote', 'set-url', remote_name, expected_url)
+            return success, stdout or stderr or f"{remote_name} URL 업데이트 완료"
+        success, stdout, stderr = self._run_git('remote', 'add', remote_name, expected_url)
+        return success, stdout or stderr or f"{remote_name} 연결 완료"
     
     def has_changes(self):
         """변경사항이 있는지 확인"""
@@ -389,7 +416,19 @@ class GitAutomation:
     def push(self):
         """원격 저장소에 푸시"""
         success, stdout, stderr = self._run_git('push')
-        return success, stdout or stderr
+        if success:
+            return True, stdout or stderr
+
+        # 업스트림이 없는 첫 푸시 케이스를 자동 처리
+        branch = self.get_current_branch()
+        if branch and branch != "unknown":
+            up_success, up_stdout, up_stderr = self._run_git('push', '-u', 'origin', branch)
+            if up_success:
+                return True, up_stdout or up_stderr
+            detail = "\n".join([p for p in [stderr, up_stderr, up_stdout] if p])
+            return False, detail
+
+        return False, stdout or stderr
     
     def get_current_branch(self):
         """현재 브랜치 이름 반환"""
@@ -6075,9 +6114,9 @@ class PortfolioAdminApp:
                      bg=ModernStyle.BG_WHITE, relief='solid', borderwidth=1,
                      padx=12, pady=8, command=cmd).pack(side=tk.LEFT, padx=3)
         
-        tk.Button(right, text="📱 모바일", font=ModernStyle.get_font(10),
+        tk.Button(right, text="모바일 미리보기", font=ModernStyle.get_font(10),
                  bg=ModernStyle.BG_WHITE, relief='solid', borderwidth=1,
-                 padx=12, pady=8, command=self.open_mobile_preview).pack(side=tk.LEFT, padx=3)
+                 width=12, padx=8, pady=8, command=self.open_mobile_preview).pack(side=tk.LEFT, padx=3)
         
         # 상태바
         status = tk.Frame(main, bg=ModernStyle.BG_LIGHT)
@@ -7013,23 +7052,17 @@ class PortfolioAdminApp:
                 self.status_var.set("✅ Git 저장소 초기화 완료")
                 self.root.update()
             
-            # 원격 저장소 확인
-            if not git.has_remote():
-                result = messagebox.askyesno("GitHub 연결 필요", 
-                    "⚠️ GitHub 원격 저장소가 연결되지 않았습니다.\n\n"
-                    "로컬 저장은 완료되었습니다.\n\n"
-                    "GitHub 연결 스크립트(setup_github.py)를\n"
-                    "실행하시겠습니까?\n\n"
-                    "💡 GitHub 저장소 URL이 필요합니다.\n"
-                    "   예: https://github.com/username/repo.git")
-                
-                if result:
-                    # setup_github.py 실행
-                    import subprocess
-                    subprocess.Popen(['python', str(SCRIPT_DIR / 'setup_github.py')], 
-                                   creationflags=subprocess.CREATE_NEW_CONSOLE)
-                
-                self.status_var.set("✅ 로컬 저장 완료 (GitHub 연결 필요)")
+            # 원격 저장소 확인/보정
+            self.status_var.set("🔗 GitHub 저장소 연결 확인 중...")
+            self.root.update()
+            remote_ok, remote_msg = git.ensure_remote(DEFAULT_GITHUB_REPO_URL)
+            if not remote_ok:
+                messagebox.showerror(
+                    "GitHub 연결 실패",
+                    f"원격 저장소 연결 확인에 실패했습니다.\n\n{remote_msg}\n\n"
+                    f"대상 저장소: {DEFAULT_GITHUB_REPO_URL}"
+                )
+                self.status_var.set("❌ GitHub 연결 실패")
                 return
             
             # 4. 변경사항 커밋 및 푸시

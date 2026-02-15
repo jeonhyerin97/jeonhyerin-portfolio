@@ -120,12 +120,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 }
 .logo{font-size:16px;font-weight:700;margin-right:32px;display:flex;align-items:center;gap:10px}
 .logo-icon{width:28px;height:28px;background:linear-gradient(135deg,#8b5cf6,#6366f1);border-radius:8px}
-.toolbar-group{display:flex;gap:4px;padding:0 12px;border-right:1px solid #2a2a2a}
+.toolbar-group{display:flex;gap:4px;padding:0 12px;border-right:1px solid #2a2a2a;flex-shrink:0}
 .toolbar-group:last-child{border-right:none}
 .btn{
   padding:8px 14px;background:#1f1f1f;border:1px solid #333;border-radius:8px;
   color:#999;font-size:12px;font-weight:500;cursor:pointer;transition:.15s;
-  display:flex;align-items:center;gap:6px;
+  display:flex;align-items:center;gap:6px;white-space:nowrap;flex-shrink:0;
 }
 .btn:hover{background:#2a2a2a;color:#fff;border-color:#444}
 .btn.primary{background:linear-gradient(135deg,#8b5cf6,#6366f1);border:none;color:#fff}
@@ -386,7 +386,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   
   <div class="toolbar-group" style="border:none">
     <button class="btn" onclick="openPreview('desktop')"><span class="btn-icon">👁</span> 미리보기</button>
-    <button class="btn" onclick="openPreview('mobile')"><span class="btn-icon">📱</span> 모바일</button>
+    <button class="btn" onclick="openPreview('mobile')"><span class="btn-icon">📱</span> 모바일 미리보기</button>
     <button class="btn primary" onclick="savePage()"><span class="btn-icon">💾</span> 저장하기</button>
   </div>
 </div>

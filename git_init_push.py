@@ -16,7 +16,7 @@ if sys.platform == 'win32':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # 설정
-GITHUB_URL = "https://github.com/jeonhyerin97/jeonhyerin-portfolio.git"
+GITHUB_URL = "https://github.com/jeonhyerin97/jeonhyerin-portfolio"
 GIT_PATH = r"C:\Program Files\Git\cmd\git.exe"
 SCRIPT_DIR = Path(__file__).parent
 os.chdir(SCRIPT_DIR)
