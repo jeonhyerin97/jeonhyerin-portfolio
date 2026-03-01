@@ -3816,19 +3816,24 @@ a.contact-value:hover {
   }
   
   .footer-columns {
-    grid-template-columns: 1fr;
-    gap: 1.5rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.4rem 0.65rem;
   }
 
   .footer-columns--dynamic {
     display: grid;
-    grid-template-columns: 1fr;
-    gap: 1.5rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.4rem 0.65rem;
     justify-content: stretch;
   }
 
   .footer-columns--dynamic .footer-column:nth-child(n + 4) {
     display: none;
+  }
+
+  .footer-columns--dynamic .footer-column {
+    gap: 1rem;
+    min-width: 0;
   }
 
   .footer-columns--dynamic .footer-projects-wrapper,
@@ -3865,14 +3870,15 @@ a.contact-value:hover {
   }
   
   .footer-project-link {
-    font-size: 0.68rem;
-    line-height: 1.35;
-    margin-bottom: 0.45rem;
+    font-size: 0.58rem;
+    line-height: 1.4;
+    margin-bottom: 0.38rem;
+    white-space: normal;
     word-break: keep-all;
   }
 
   .footer-section-title {
-    font-size: 0.68rem;
+    font-size: 0.6rem;
     letter-spacing: 0.1em;
   }
 }

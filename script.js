@@ -330,10 +330,14 @@
           ? visibleItems
               .map((item, itemIndex) => {
                 const label = toTitleCase(item.title || '');
+                const projectParam = encodeURIComponent(String(item.title || ''));
+                const popupHref = projectParam
+                  ? `${safeHref}${safeHref.includes('?') ? '&' : '?'}project=${projectParam}&autopopup=1`
+                  : safeHref;
                 if (isCurrentTab && overlay && projectsData.length) {
                   return `<a href="#" class="footer-project-link" data-footer-current="1" data-project="${itemIndex}">${label}</a>`;
                 }
-                return `<a href="${safeHref}" class="footer-project-link">${label}</a>`;
+                return `<a href="${popupHref}" class="footer-project-link">${label}</a>`;
               })
               .join('')
           : `<a href="${safeHref}" class="footer-project-link">${toTitleCase(title)}</a>`;
