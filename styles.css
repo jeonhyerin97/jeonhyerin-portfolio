@@ -2759,6 +2759,12 @@ img {
     margin-right: auto;
   }
 
+  .about-profile-image {
+    width: 84%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
   .about-media-column {
     margin-left: auto;
     margin-right: auto;
