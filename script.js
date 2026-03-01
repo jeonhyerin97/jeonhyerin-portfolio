@@ -405,48 +405,11 @@
     const thumbs = document.querySelectorAll('.grid-thumb');
     if (!thumbs.length) return;
 
-    // iPad/Safari에서 observer 콜백 지연 시 그리드가 비어 보이지 않도록 기본 표시
+    // Start thumbnail loading immediately for the most reliable first paint.
     thumbs.forEach(thumb => {
       thumb.classList.add('loaded');
+      loadThumbnail(thumb);
     });
-
-    // Intersection Observer로 뷰포트에 보일 때 이미지 로드
-    const observerOptions = {
-      root: null,
-      rootMargin: '100px', // 100px 전에 미리 로드 시작
-      threshold: 0.01
-    };
-
-    // 구형 브라우저(일부 iPad 포함) 호환 fallback
-    if (typeof IntersectionObserver !== 'function') {
-      thumbs.forEach(thumb => {
-        loadThumbnail(thumb);
-      });
-      return;
-    }
-
-    const imageObserver = new IntersectionObserver((entries, observer) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          const thumb = entry.target;
-          loadThumbnail(thumb);
-          observer.unobserve(thumb);
-        }
-      });
-    }, observerOptions);
-
-    thumbs.forEach(thumb => {
-      imageObserver.observe(thumb);
-    });
-
-    // Observer가 동작하지 않는 환경에서 최종 fallback
-    window.setTimeout(() => {
-      thumbs.forEach(thumb => {
-        if (!thumb.classList.contains('loaded')) {
-          loadThumbnail(thumb);
-        }
-      });
-    }, 1200);
   }
 
   function getProjectImageBasePath(project) {
@@ -1276,23 +1239,10 @@
       if (!img) return;
       setImageLoadingState(img, true);
       img.setAttribute('loading', 'eager');
-      img.setAttribute('fetchpriority', index < 12 ? 'high' : 'auto');
+      img.setAttribute('fetchpriority', index < 24 ? 'high' : 'auto');
+      img.setAttribute('decoding', 'async');
+      loadLazyImageWithFallback(img);
     });
-
-    const startLoading = () => {
-      images.forEach((img, index) => {
-        window.setTimeout(() => {
-          loadLazyImageWithFallback(img);
-        }, Math.min(index * 10, 220));
-      });
-    };
-
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(startLoading);
-      return;
-    }
-
-    startLoading();
   }
 
   function setImageLoadingState(img, isLoading) {
