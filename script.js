@@ -24,7 +24,7 @@
   let armedGridResetTimer = null;
   const heroImagePreloadCache = new Map();
   const heroImageResolvedSrc = new Map();
-  const APP_VERSION = '20260302-footer-final';
+  const APP_VERSION = '20260302-mobile-image-fast';
   const VERSIONED_HTML_FILES = new Set([
     'index.html',
     'projects.html',
@@ -463,10 +463,12 @@
   function handleThumbnailFallback() {
     const thumbs = document.querySelectorAll('.grid-thumb');
     if (!thumbs.length) return;
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
 
-    // Start thumbnail loading immediately for the most reliable first paint.
     thumbs.forEach(thumb => {
       thumb.classList.add('loaded');
+      const hasInlineBg = String(thumb.style.backgroundImage || '').includes('url(');
+      if (isMobile && hasInlineBg) return;
       loadThumbnail(thumb);
     });
   }
@@ -537,7 +539,9 @@
   function primeInitialHeroImages() {
     if (!projectsData.length) return;
 
-    const preloadCount = window.matchMedia('(max-width: 768px)').matches ? 4 : 2;
+    if (window.matchMedia('(max-width: 768px)').matches) return;
+
+    const preloadCount = 2;
     const kickoff = () => {
       projectsData.slice(0, preloadCount).forEach((project, index) => {
         window.setTimeout(() => {
@@ -569,16 +573,28 @@
       return url.replace(/\.(jpg|jpeg|png)$/i, '.webp');
     }
     
-    // 이미지 로드 시도 순서: thumb.jpg → thumb.webp → cover.jpg → cover.webp
     const urlsToTry = [];
-    if (thumbUrl) {
-      urlsToTry.push(thumbUrl);
-      urlsToTry.push(getWebpUrl(thumbUrl));
+    const seenUrls = new Set();
+    function pushCandidate(url) {
+      if (!url || seenUrls.has(url)) return;
+      seenUrls.add(url);
+      urlsToTry.push(url);
     }
-    if (coverUrl) {
-      urlsToTry.push(coverUrl);
-      urlsToTry.push(getWebpUrl(coverUrl));
+    function pushCandidates(url) {
+      if (!url) return;
+      const isWebp = /\.webp($|\?)/i.test(url);
+      if (isWebp) {
+        pushCandidate(url);
+        pushCandidate(url.replace(/\.webp($|\?)/i, '.jpg$1'));
+        return;
+      }
+      pushCandidate(getWebpUrl(url));
+      pushCandidate(url);
     }
+
+    // Prefer smaller webp assets first to reduce mobile transfer size.
+    pushCandidates(thumbUrl);
+    pushCandidates(coverUrl);
     
     function tryNextUrl(index) {
       if (index >= urlsToTry.length) {
@@ -1009,8 +1025,14 @@
     setImageLoadingState(coverImage, true);
     attachHeroImageFallback(coverImage, heroFallbackSources);
 
-    // Immediately request all detail images when the overlay opens.
-    eagerLoadAllDetailImages(Array.from(detail.querySelectorAll('.lazy-image')));
+    const detailImages = Array.from(detail.querySelectorAll('.lazy-image'));
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      initDetailLazyLoading(detail);
+      scheduleDetailWarmup(detail, 4);
+      eagerLoadPriorityDetailImages(detail);
+    } else {
+      eagerLoadAllDetailImages(detailImages);
+    }
     
     // 스크롤 시 이미지 서서히 나타나는 애니메이션 적용
     initOverlayScrollReveal(detail);
@@ -1329,7 +1351,7 @@
       if (!slideImages.length) return;
 
       const eagerCount = window.matchMedia('(max-width: 768px)').matches
-        ? slideImages.length
+        ? Math.min(slideImages.length, 4)
         : Math.min(slideImages.length, 12);
 
       slideImages.slice(0, eagerCount).forEach((img, index) => {

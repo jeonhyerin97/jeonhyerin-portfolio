@@ -1899,7 +1899,7 @@ img {
   background-position: center;
   background-repeat: no-repeat;
   transition: transform var(--transition-slow), opacity 0.3s ease;
-  opacity: 0;
+  opacity: 1;
 }
 
 .grid-thumb.loaded {

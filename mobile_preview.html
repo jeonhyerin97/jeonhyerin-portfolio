@@ -136,7 +136,7 @@
       const safePage = requested.replace(/[\\\/]/g, "");
       const allowed = ["index.html", "projects.html", "drawings.html", "graphics.html", "about.html", "study.html"];
       const target = allowed.includes(safePage) ? safePage : "projects.html";
-      const assetVersion = "v=20260302-footer-final";
+      const assetVersion = "v=20260302-mobile-image-fast";
       const targetWithVersion = target.includes("?") ? `${target}&${assetVersion}` : `${target}?${assetVersion}`;
       const isHttpContext = window.location.protocol === "http:" || window.location.protocol === "https:";
       const shareUrl = params.get("share")

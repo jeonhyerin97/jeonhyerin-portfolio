@@ -6866,6 +6866,15 @@ class PortfolioAdminApp:
     def generate_grid(self, projects):
         items = []
         project_type = self.current_mode if self.current_mode in ['drawings', 'graphics'] else 'projects'
+
+        def choose_existing_image(*relative_paths):
+            for rel_path in relative_paths:
+                if not rel_path:
+                    continue
+                if (BASE_DIR / rel_path).exists():
+                    return rel_path.replace('\\', '/')
+            return (relative_paths[0] if relative_paths else '').replace('\\', '/')
+
         for i, p in enumerate(projects):
             if not p.get('visible', True):
                 continue
@@ -6875,12 +6884,25 @@ class PortfolioAdminApp:
             if not year:
                 dur = p.get('duration', '')
                 year = dur[:4] if dur else ''
-            
-            # thumb.jpg 우선, cover.jpg fallback (CSS에서 처리)
+
+            thumb_base = Path('images') / project_type / slug
+            thumb_path = choose_existing_image(
+                thumb_base / 'thumb.webp',
+                thumb_base / 'thumb.jpg',
+                thumb_base / 'cover.webp',
+                thumb_base / 'cover.jpg'
+            )
+            cover_path = choose_existing_image(
+                thumb_base / 'cover.webp',
+                thumb_base / 'cover.jpg',
+                thumb_base / 'thumb.webp',
+                thumb_base / 'thumb.jpg'
+            )
+
             items.append(f'''      <article class="grid-item" data-project="{i}">
         <button class="grid-item-btn" aria-haspopup="dialog">
           <div class="grid-item-image">
-            <div class="grid-thumb" data-thumb="images/{project_type}/{slug}/thumb.jpg" data-cover="images/{project_type}/{slug}/cover.jpg" style="background-image: url('images/{project_type}/{slug}/thumb.jpg');"></div>
+            <div class="grid-thumb" data-thumb="{thumb_path}" data-cover="{cover_path}" style="background-image: url('{thumb_path}');"></div>
           </div>
           <div class="grid-item-overlay">
             <span class="grid-item-title">{display}</span>
