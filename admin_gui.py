@@ -19,14 +19,20 @@ JEONHYERIN Portfolio Admin Tool - Pro Version v2
 import json
 import re
 import os
+import html
+import copy
+import ipaddress
+import socket
 import webbrowser
 import shutil
 import subprocess
+from functools import partial
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import quote
 from datetime import datetime, timedelta
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, filedialog, simpledialog
+from tkinter import ttk, messagebox, scrolledtext, filedialog, simpledialog, colorchooser
 from PIL import Image, ImageTk
 import threading
 
@@ -607,6 +613,7 @@ class DragDropManager:
             if self.highlight_zone:
                 self.highlight_zone.configure(relief='solid', borderwidth=1)
                 self.highlight_zone._set_drop_highlight(False)
+                self.highlight_zone.clear_reorder_preview()
             
             # 새 하이라이트
             if target_zone and target_zone != self.drag_data['source_zone']:
@@ -614,6 +621,11 @@ class DragDropManager:
                 target_zone._set_drop_highlight(True)
             
             self.highlight_zone = target_zone
+
+        if target_zone and target_zone == self.drag_data['source_zone']:
+            target_zone.preview_reorder(self.drag_data['image_path'], event.x_root, event.y_root)
+        elif target_zone:
+            target_zone.clear_reorder_preview()
     
     def end_drag(self, event):
         """드래그 종료"""
@@ -632,13 +644,16 @@ class DragDropManager:
         if self.highlight_zone:
             self.highlight_zone.configure(relief='solid', borderwidth=1)
             self.highlight_zone._set_drop_highlight(False)
+            self.highlight_zone.clear_reorder_preview()
             self.highlight_zone = None
         
         # 커서 복원
         self.root.config(cursor='')
         
         # 이미지 이동 처리
-        if target_zone and target_zone != self.drag_data['source_zone']:
+        if target_zone and target_zone == self.drag_data['source_zone']:
+            target_zone.reorder_image_by_drop(self.drag_data['image_path'], event.x_root, event.y_root)
+        elif target_zone and target_zone != self.drag_data['source_zone']:
             self._move_image(self.drag_data['source_zone'], target_zone, 
                            self.drag_data['image_path'])
         
@@ -912,6 +927,8 @@ class DropZone(tk.Frame):
         self.check_vars = {}  # 체크박스 변수들
         self.image_labels = {}  # 이미지 라벨 참조 저장
         
+        self.item_frames = {}
+        self.reorder_preview_key = None
         self.configure(bg=ModernStyle.BG_WHITE, relief='solid', borderwidth=1)
         self.create_ui()
         self.load_images()
@@ -1078,6 +1095,8 @@ class DropZone(tk.Frame):
         
         self.check_vars.clear()
         self.image_labels.clear()
+        self.item_frames.clear()
+        self.reorder_preview_key = None
         
         if not self.images:
             self.empty_label = tk.Label(self.image_container,
@@ -1092,6 +1111,7 @@ class DropZone(tk.Frame):
         for i, img_path in enumerate(self.images):
             frame = tk.Frame(self.image_container, bg=ModernStyle.BG_WHITE)
             frame.pack(side=tk.LEFT, padx=5, pady=5)
+            self.item_frames[str(img_path)] = frame
             
             # 체크박스 (다중 선택용)
             var = tk.BooleanVar(value=False)
@@ -1141,6 +1161,84 @@ class DropZone(tk.Frame):
                              bg=ModernStyle.BG_WHITE, relief='flat',
                              command=lambda idx=i: self.move_image(idx, 1)).pack(side=tk.LEFT)
     
+    def can_reorder_images(self):
+        return self.image_type in ['sub', 'model', 'slide'] and len(self.images) > 1
+
+    def clear_reorder_preview(self):
+        if self.reorder_preview_key and self.reorder_preview_key in self.item_frames:
+            frame = self.item_frames[self.reorder_preview_key]
+            if frame.winfo_exists():
+                frame.configure(highlightthickness=0)
+        self.reorder_preview_key = None
+
+    def _get_reorder_target_index(self, x_root, y_root):
+        if not self.can_reorder_images():
+            return None
+
+        best_idx = None
+        best_distance = None
+
+        for idx, img_path in enumerate(self.images):
+            frame = self.item_frames.get(str(img_path))
+            if not frame or not frame.winfo_exists():
+                continue
+            center_x = frame.winfo_rootx() + (frame.winfo_width() / 2)
+            center_y = frame.winfo_rooty() + (frame.winfo_height() / 2)
+            distance = abs(x_root - center_x) + (abs(y_root - center_y) * 0.35)
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_idx = idx
+
+        return best_idx
+
+    def preview_reorder(self, image_path, x_root, y_root):
+        self.clear_reorder_preview()
+        target_idx = self._get_reorder_target_index(x_root, y_root)
+        if target_idx is None:
+            return
+
+        target_key = str(self.images[target_idx])
+        source_key = str(Path(image_path))
+        if target_key == source_key:
+            return
+
+        frame = self.item_frames.get(target_key)
+        if not frame or not frame.winfo_exists():
+            return
+
+        frame.configure(
+            highlightbackground=ModernStyle.ACCENT,
+            highlightcolor=ModernStyle.ACCENT,
+            highlightthickness=2
+        )
+        self.reorder_preview_key = target_key
+
+    def reorder_image_by_drop(self, image_path, x_root, y_root):
+        self.clear_reorder_preview()
+        if not self.can_reorder_images():
+            return False
+
+        source_key = str(Path(image_path))
+        source_idx = next((idx for idx, path in enumerate(self.images) if str(path) == source_key), None)
+        target_idx = self._get_reorder_target_index(x_root, y_root)
+
+        if source_idx is None or target_idx is None or source_idx == target_idx:
+            return False
+
+        moved_path = self.images.pop(source_idx)
+        self.images.insert(target_idx, moved_path)
+        self._renumber_images()
+
+        try:
+            if self.winfo_exists():
+                self.load_images()
+                if self.on_change:
+                    self.on_change()
+        except Exception:
+            pass
+
+        return True
+
     def _bind_drag_events(self, widget, img_path, thumbnail):
         """드래그 앤 드롭 이벤트 바인딩"""
         def on_press(event):
@@ -1415,6 +1513,10 @@ class ProjectEditorDialog(tk.Toplevel):
         self.mode = mode
         self.on_save = on_save
         self.result = None
+        self.initial_custom_fields = self._prepare_initial_custom_fields()
+        self.meta_field_definitions = self._get_meta_field_definitions()
+        self.meta_field_order = self._get_initial_meta_field_order()
+        self._loading_custom_fields = False
         
         self.title(f"프로젝트 편집 - {project.get('title', 'New')}")
         self.geometry("950x800")
@@ -1435,6 +1537,225 @@ class ProjectEditorDialog(tk.Toplevel):
         
         self.setup_styles()
         self.create_ui()
+
+    def _prepare_initial_custom_fields(self):
+        existing = self.project.get('custom_fields', [])
+        self._custom_field_seq = 0
+        self._known_custom_field_ids = set()
+        normalized = []
+
+        if not isinstance(existing, list):
+            return normalized
+
+        for field in existing:
+            if not isinstance(field, dict):
+                continue
+            if self._is_reserved_meta_label(field.get('label')):
+                continue
+            field_id = self._make_custom_field_id(field.get('id'))
+            normalized.append({
+                'id': field_id,
+                'label': field.get('label', ''),
+                'value': field.get('value', ''),
+            })
+        return normalized
+
+    def _is_reserved_meta_label(self, label):
+        normalized = str(label or '').strip().upper()
+        return normalized in {
+            'LOCATION',
+            'DURATION',
+            'PROGRAM',
+            'STUDIO',
+        }
+
+    def _make_custom_field_id(self, preferred=None):
+        raw = str(preferred or '').strip()
+        if raw:
+            base = re.sub(r'[^a-zA-Z0-9_-]+', '-', raw).strip('-')
+        else:
+            base = ''
+        if not base:
+            base = f"field-{self._custom_field_seq + 1}"
+
+        candidate = base
+        suffix = 2
+        while candidate in self._known_custom_field_ids:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+
+        self._known_custom_field_ids.add(candidate)
+        self._custom_field_seq += 1
+        return candidate
+
+    def _make_custom_meta_token(self, field_id):
+        return f"custom:{field_id}"
+
+    def _get_custom_field_label(self, field_data):
+        if 'label_var' in field_data:
+            return field_data['label_var'].get().strip().upper()
+        return field_data['label_entry'].get().strip().upper()
+
+    def _get_custom_field_value(self, field_data):
+        value_widget = field_data.get('value_widget')
+        if value_widget is not None:
+            return value_widget.get('1.0', tk.END).strip()
+        return field_data['value_entry'].get().strip()
+
+    def _get_current_custom_fields(self):
+        if hasattr(self, 'custom_field_widgets'):
+            return [
+                {
+                    'id': field_data['id'],
+                    'label': self._get_custom_field_label(field_data),
+                    'value': self._get_custom_field_value(field_data).replace('\r\n', '\n').replace('\r', '\n').replace('\n', ', '),
+                }
+                for field_data in self.custom_field_widgets
+                if not self._is_reserved_meta_label(self._get_custom_field_label(field_data))
+            ]
+        return [dict(field) for field in self.initial_custom_fields]
+
+    def _get_meta_order_items(self):
+        label_map = dict(self.meta_field_definitions)
+        custom_fields = {
+            self._make_custom_meta_token(field['id']): field
+            for field in self._get_current_custom_fields()
+        }
+        items = []
+
+        for token in self.meta_field_order:
+            if token in label_map:
+                items.append((token, f"[기본] {label_map[token]}"))
+            elif token in custom_fields:
+                custom_label = custom_fields[token].get('label', '').strip().upper() or 'NEW CUSTOM FIELD'
+                items.append((token, f"[추가] {custom_label}"))
+
+        return items
+
+    def _get_meta_field_definitions(self):
+        return [
+            ('location', 'LOCATION'),
+            ('duration', 'DURATION'),
+            ('program', 'PROGRAM'),
+            ('studio', 'STUDIO'),
+        ]
+
+    def _get_basic_info_fields(self):
+        common_fields = [
+            ('title', '팝업 제목 (TITLE) *', '상세 팝업 상단에 표시되는 제목'),
+            ('display_title', '그리드 제목', '썸네일 카드 위에 표시되는 제목'),
+            ('slug', '슬러그 (폴더명)', '예: montana-hannam'),
+            ('display_year', '표시 연도', '예: 2025'),
+        ]
+
+        if False and self.mode == 'drawings':
+            return common_fields + [
+                ('year', '제작 연도 (YEAR)', '예: 2024'),
+                ('medium', '매체 (MEDIUM)', '예: Graphite on Paper'),
+                ('series', '시리즈 (SERIES)', '예: 12 Drawings'),
+            ]
+
+        return common_fields + [
+            ('location', '위치 (LOCATION)', '예: Seoul, Korea'),
+            ('duration', '기간 (DURATION)', '예: Sep 2025 - Dec 2025'),
+            ('program', '프로그램 (PROGRAM)', '예: Residential'),
+            ('studio', '스튜디오 (STUDIO)', '예: INTERIOR ARCHITECTURE STUDIO(2)'),
+        ]
+
+    def _get_initial_meta_field_order(self):
+        default_order = [key for key, _label in self.meta_field_definitions]
+        default_order.extend(
+            self._make_custom_meta_token(field['id'])
+            for field in self.initial_custom_fields
+        )
+        saved_order = self.project.get('meta_field_order', [])
+        if not isinstance(saved_order, list):
+            return default_order
+
+        ordered = []
+        for key in saved_order:
+            normalized = None
+            if key in default_order:
+                normalized = key
+            elif isinstance(key, str):
+                candidate = self._make_custom_meta_token(key)
+                if candidate in default_order:
+                    normalized = candidate
+            if normalized and normalized not in ordered:
+                ordered.append(normalized)
+        for key in default_order:
+            if key not in ordered:
+                ordered.append(key)
+        return ordered
+
+    def _refresh_meta_field_order_listbox(self, select_idx=None):
+        if not hasattr(self, 'meta_order_listbox'):
+            return
+
+        self.meta_order_listbox.delete(0, tk.END)
+        items = self._get_meta_order_items()
+        for idx, (_token, label) in enumerate(items, start=1):
+            self.meta_order_listbox.insert(tk.END, f"{idx}. {label}")
+
+        if not items:
+            return
+
+        if select_idx is None:
+            current = self.meta_order_listbox.curselection()
+            select_idx = int(current[0]) if current else 0
+        select_idx = max(0, min(select_idx, len(items) - 1))
+        self.meta_order_listbox.selection_clear(0, tk.END)
+        self.meta_order_listbox.selection_set(select_idx)
+        self.meta_order_listbox.activate(select_idx)
+
+    def _move_meta_field_order(self, direction):
+        if not hasattr(self, 'meta_order_listbox'):
+            return
+
+        selection = self.meta_order_listbox.curselection()
+        if not selection:
+            return
+
+        current_idx = int(selection[0])
+        new_idx = current_idx + direction
+        if new_idx < 0 or new_idx >= len(self.meta_field_order):
+            return
+
+        self.meta_field_order[current_idx], self.meta_field_order[new_idx] = (
+            self.meta_field_order[new_idx],
+            self.meta_field_order[current_idx],
+        )
+        self._refresh_meta_field_order_listbox(new_idx)
+
+    def _reset_meta_field_order(self):
+        self.meta_field_order = [key for key, _label in self.meta_field_definitions]
+        self.meta_field_order.extend(
+            self._make_custom_meta_token(field['id'])
+            for field in self._get_current_custom_fields()
+        )
+        self._refresh_meta_field_order_listbox(0)
+
+    def _sync_meta_field_order(self, selected_token=None):
+        base_tokens = [key for key, _label in self.meta_field_definitions]
+        custom_tokens = [
+            self._make_custom_meta_token(field['id'])
+            for field in self._get_current_custom_fields()
+        ]
+        allowed_tokens = base_tokens + custom_tokens
+
+        new_order = []
+        for token in self.meta_field_order:
+            if token in allowed_tokens and token not in new_order:
+                new_order.append(token)
+        for token in allowed_tokens:
+            if token not in new_order:
+                new_order.append(token)
+        self.meta_field_order = new_order
+
+        if selected_token and selected_token in self.meta_field_order:
+            self._refresh_meta_field_order_listbox(self.meta_field_order.index(selected_token))
+        else:
+            self._refresh_meta_field_order_listbox()
     
     def setup_styles(self):
         style = ttk.Style()
@@ -1578,6 +1899,55 @@ class ProjectEditorDialog(tk.Toplevel):
             entry.insert(0, value)
             entry.pack(fill=tk.X, pady=(3, 0), ipady=8)
             self.entries[field] = entry
+
+        meta_order_section = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
+        meta_order_section.pack(fill=tk.X, padx=20, pady=(16, 8))
+
+        meta_header = tk.Frame(meta_order_section, bg=ModernStyle.BG_WHITE)
+        meta_header.pack(fill=tk.X)
+
+        tk.Label(meta_header, text="표시 순서 미리보기", font=ModernStyle.get_font(12, 'bold'),
+                bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT)
+        tk.Button(meta_header, text="기본값", font=ModernStyle.get_font(9),
+                 bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_PRIMARY,
+                 relief='solid', borderwidth=1, padx=10, pady=4, cursor='hand2',
+                 command=self._reset_meta_field_order).pack(side=tk.RIGHT)
+
+        tk.Label(meta_order_section,
+                text="팝업 오른쪽 정보칸에 실제로 보이는 순서입니다. 기본 필드와 추가 필드를 함께 움직일 수 있습니다.",
+                font=ModernStyle.get_font(8), bg=ModernStyle.BG_WHITE,
+                fg=ModernStyle.TEXT_SUBTLE).pack(anchor=tk.W, pady=(5, 8))
+        tk.Label(meta_order_section,
+                text="[기본] LOCATION / [추가] PROJECT TYPE 형태로 구분해서 보여줍니다.",
+                font=ModernStyle.get_font(8), bg=ModernStyle.BG_WHITE,
+                fg=ModernStyle.TEXT_MUTED).pack(anchor=tk.W, pady=(0, 8))
+
+        meta_body = tk.Frame(meta_order_section, bg=ModernStyle.BG_WHITE)
+        meta_body.pack(fill=tk.X)
+
+        self.meta_order_listbox = tk.Listbox(
+            meta_body,
+            height=max(6, len(self.meta_field_order)),
+            exportselection=False,
+            font=ModernStyle.get_font(9),
+            relief='solid',
+            borderwidth=1,
+        )
+        self.meta_order_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        meta_buttons = tk.Frame(meta_body, bg=ModernStyle.BG_WHITE)
+        meta_buttons.pack(side=tk.LEFT, padx=(10, 0), anchor='n')
+
+        tk.Button(meta_buttons, text="위로", font=ModernStyle.get_font(9),
+                 bg=ModernStyle.BG_LIGHT, relief='solid', borderwidth=1,
+                 width=8, pady=4, cursor='hand2',
+                 command=lambda: self._move_meta_field_order(-1)).pack(fill=tk.X, pady=(0, 6))
+        tk.Button(meta_buttons, text="아래로", font=ModernStyle.get_font(9),
+                 bg=ModernStyle.BG_LIGHT, relief='solid', borderwidth=1,
+                 width=8, pady=4, cursor='hand2',
+                 command=lambda: self._move_meta_field_order(1)).pack(fill=tk.X)
+
+        self._refresh_meta_field_order_listbox(0)
         
         # 설명 (텍스트 드래그 선택 기반 링크 지원)
         desc_frame = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
@@ -1633,6 +2003,9 @@ class ProjectEditorDialog(tk.Toplevel):
         tk.Label(custom_section, text="프로젝트 상세페이지에 표시될 추가 정보 (예: COLLABORATOR, CLIENT, AREA 등)",
                 font=ModernStyle.get_font(8), bg=ModernStyle.BG_WHITE,
                 fg=ModernStyle.TEXT_SUBTLE).pack(anchor=tk.W, pady=(5, 0))
+        tk.Label(custom_section, text="이 항목들도 위 '표시 순서 미리보기' 목록에 자동으로 들어갑니다.",
+                font=ModernStyle.get_font(8), bg=ModernStyle.BG_WHITE,
+                fg=ModernStyle.TEXT_MUTED).pack(anchor=tk.W, pady=(4, 0))
         
         # 커스텀 필드 컨테이너 (먼저 생성)
         custom_fields_container = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
@@ -1648,10 +2021,20 @@ class ProjectEditorDialog(tk.Toplevel):
                  command=self._add_custom_field_click).pack(side=tk.RIGHT)
         
         # 기존 커스텀 필드 로드
-        existing_custom = self.project.get('custom_fields', [])
+        existing_custom = self.initial_custom_fields
         if existing_custom:
-            for cf in existing_custom:
-                self.add_custom_field(custom_fields_container, cf.get('label', ''), cf.get('value', ''))
+            self._loading_custom_fields = True
+            try:
+                for cf in existing_custom:
+                    self.add_custom_field(
+                        custom_fields_container,
+                        cf.get('label', ''),
+                        cf.get('value', ''),
+                        field_id=cf.get('id'),
+                    )
+            finally:
+                self._loading_custom_fields = False
+        self._sync_meta_field_order()
         
         # 공개/비공개
         vis_frame = tk.Frame(scrollable, bg=ModernStyle.BG_WHITE)
@@ -1683,14 +2066,14 @@ class ProjectEditorDialog(tk.Toplevel):
         """Entry 위젯의 선택된 텍스트에 링크 추가"""
         popup = tk.Toplevel(self)
         popup.title("🔗 선택 텍스트에 링크 추가")
-        popup.geometry("450x280")
+        popup.geometry("480x360")
         popup.configure(bg=ModernStyle.BG_WHITE)
         popup.transient(self)
         popup.grab_set()
         
         popup.update_idletasks()
-        x = (popup.winfo_screenwidth() - 450) // 2
-        y = (popup.winfo_screenheight() - 280) // 2
+        x = (popup.winfo_screenwidth() - 480) // 2
+        y = (popup.winfo_screenheight() - 360) // 2
         popup.geometry(f"+{x}+{y}")
         
         current_text = entry_widget.get()
@@ -1753,7 +2136,7 @@ class ProjectEditorDialog(tk.Toplevel):
         
         # 버튼
         btn_frame = tk.Frame(popup, bg=ModernStyle.BG_WHITE)
-        btn_frame.pack(fill=tk.X, padx=20, pady=5)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=12)
         
         tk.Button(btn_frame, text="✓ 링크 적용", font=ModernStyle.get_font(10, 'bold'),
                  bg=ModernStyle.ACCENT, fg=ModernStyle.BG_WHITE,
@@ -1774,22 +2157,110 @@ class ProjectEditorDialog(tk.Toplevel):
                 display_text = f"'{selected[:20]}...'" if len(selected) > 20 else f"'{selected}'"
                 menu.add_command(label=f"🔗 {display_text} 에 링크 추가",
                                command=lambda: self._add_link_to_text(text_widget, selected))
+                menu.add_command(label=f"🔠 {display_text} 텍스트 크기 조절",
+                               command=lambda: self._add_text_size_to_text(text_widget, selected))
                 menu.tk_popup(event.x_root, event.y_root)
         except tk.TclError:
             pass  # 선택된 텍스트 없음
+
+    def _apply_text_wrapper_to_text_widget(self, text_widget, selected_text, wrapped_text):
+        try:
+            sel_start = text_widget.index(tk.SEL_FIRST)
+            sel_end = text_widget.index(tk.SEL_LAST)
+            text_widget.delete(sel_start, sel_end)
+            text_widget.insert(sel_start, wrapped_text)
+        except tk.TclError:
+            current = text_widget.get("1.0", tk.END)
+            new_text = current.replace(selected_text, wrapped_text, 1)
+            text_widget.delete("1.0", tk.END)
+            text_widget.insert("1.0", new_text.rstrip())
+
+    def _add_text_size_to_text(self, text_widget, selected_text):
+        popup = tk.Toplevel(self)
+        popup.title("🔠 선택 텍스트 크기 조절")
+        popup.geometry("460x340")
+        popup.configure(bg=ModernStyle.BG_WHITE)
+        popup.transient(self)
+        popup.grab_set()
+
+        popup.update_idletasks()
+        x = (popup.winfo_screenwidth() - 460) // 2
+        y = (popup.winfo_screenheight() - 340) // 2
+        popup.geometry(f"+{x}+{y}")
+
+        tk.Label(popup, text="선택 텍스트 크기 조절", font=ModernStyle.get_font(14, 'bold'),
+                bg=ModernStyle.BG_WHITE).pack(anchor=tk.W, padx=20, pady=(15, 10))
+
+        tk.Label(popup, text="선택된 텍스트", font=ModernStyle.get_font(9),
+                bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE).pack(anchor=tk.W, padx=20)
+
+        selected_frame = tk.Frame(popup, bg=ModernStyle.BG_LIGHT, relief='solid', borderwidth=1)
+        selected_frame.pack(fill=tk.X, padx=20, pady=(3, 12))
+        tk.Label(selected_frame, text=selected_text, font=ModernStyle.get_font(10, 'bold'),
+                bg=ModernStyle.BG_LIGHT, fg=ModernStyle.ACCENT, wraplength=380).pack(padx=10, pady=8)
+
+        tk.Label(popup, text="텍스트 크기 (%)", font=ModernStyle.get_font(9),
+                bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE).pack(anchor=tk.W, padx=20)
+
+        size_var = tk.StringVar(value="125")
+        size_spinbox = tk.Spinbox(
+            popup,
+            from_=70,
+            to=200,
+            increment=5,
+            textvariable=size_var,
+            font=ModernStyle.get_font(10),
+            relief='solid',
+            borderwidth=1,
+            width=8,
+        )
+        size_spinbox.pack(anchor=tk.W, padx=20, pady=(4, 10), ipady=4)
+
+        tk.Label(
+            popup,
+            text="100은 기본 크기이고, 70~95는 더 작게, 105~200은 더 크게 표시됩니다.",
+            font=ModernStyle.get_font(8),
+            bg=ModernStyle.BG_WHITE,
+            fg=ModernStyle.TEXT_MUTED,
+        ).pack(anchor=tk.W, padx=20)
+
+        def apply_text_size():
+            try:
+                size_percent = int(size_var.get().strip())
+            except ValueError:
+                messagebox.showwarning("크기 오류", "텍스트 크기는 숫자로 입력해 주세요.", parent=popup)
+                return
+
+            size_percent = max(70, min(size_percent, 200))
+            wrapped_text = f"[size={size_percent}]{selected_text}[/size]"
+            self._apply_text_wrapper_to_text_widget(text_widget, selected_text, wrapped_text)
+            popup.destroy()
+
+        btn_frame = tk.Frame(popup, bg=ModernStyle.BG_WHITE)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=12)
+
+        tk.Button(btn_frame, text="크기 적용", font=ModernStyle.get_font(10, 'bold'),
+                 bg=ModernStyle.ACCENT, fg=ModernStyle.BG_WHITE,
+                 relief='flat', padx=20, pady=6, command=apply_text_size).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Button(btn_frame, text="취소", font=ModernStyle.get_font(10),
+                 bg=ModernStyle.BG_WHITE, relief='solid', borderwidth=1,
+                 padx=15, pady=6, command=popup.destroy).pack(side=tk.LEFT)
+
+        popup.bind('<Return>', lambda e: apply_text_size())
+        size_spinbox.focus_set()
     
     def _add_link_to_text(self, text_widget, selected_text):
         """Text 위젯의 선택된 텍스트에 링크 추가"""
         popup = tk.Toplevel(self)
         popup.title("🔗 선택 텍스트에 링크 추가")
-        popup.geometry("450x280")
+        popup.geometry("480x360")
         popup.configure(bg=ModernStyle.BG_WHITE)
         popup.transient(self)
         popup.grab_set()
         
         popup.update_idletasks()
-        x = (popup.winfo_screenwidth() - 450) // 2
-        y = (popup.winfo_screenheight() - 280) // 2
+        x = (popup.winfo_screenwidth() - 480) // 2
+        y = (popup.winfo_screenheight() - 360) // 2
         popup.geometry(f"+{x}+{y}")
         
         # 헤더
@@ -1861,7 +2332,7 @@ class ProjectEditorDialog(tk.Toplevel):
         
         # 버튼
         btn_frame = tk.Frame(popup, bg=ModernStyle.BG_WHITE)
-        btn_frame.pack(fill=tk.X, padx=20, pady=5)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=12)
         
         tk.Button(btn_frame, text="✓ 링크 적용", font=ModernStyle.get_font(10, 'bold'),
                  bg=ModernStyle.ACCENT, fg=ModernStyle.BG_WHITE,
@@ -1878,8 +2349,10 @@ class ProjectEditorDialog(tk.Toplevel):
         if hasattr(self, 'custom_fields_container'):
             self.add_custom_field(self.custom_fields_container)
     
-    def add_custom_field(self, container, label='', value=''):
+    def add_custom_field(self, container, label='', value='', field_id=None):
         """커스텀 메타 필드 추가"""
+        field_id = field_id or self._make_custom_field_id()
+        order_token = self._make_custom_meta_token(field_id)
         frame = tk.Frame(container, bg=ModernStyle.BG_WHITE)
         frame.pack(fill=tk.X, pady=5)
         
@@ -1894,17 +2367,21 @@ class ProjectEditorDialog(tk.Toplevel):
         def remove_field():
             self.custom_field_widgets.remove(field_data)
             frame.destroy()
+            self._sync_meta_field_order()
         
         tk.Button(label_frame, text="✕", font=ModernStyle.get_font(8),
                  bg=ModernStyle.BG_WHITE, fg=ModernStyle.DANGER,
                  relief='flat', cursor='hand2', width=2,
                  command=remove_field).pack(side=tk.RIGHT)
         
-        label_entry = tk.Entry(frame, font=ModernStyle.get_font(9),
+        label_var = tk.StringVar(value=label)
+        label_entry = tk.Entry(frame, textvariable=label_var, font=ModernStyle.get_font(9),
                               bg=ModernStyle.BG_LIGHT, fg=ModernStyle.TEXT_PRIMARY,
                               relief='solid', borderwidth=1)
-        label_entry.insert(0, label)
         label_entry.pack(fill=tk.X, pady=(2, 5), ipady=5)
+        label_var.trace_add('write', lambda *_: self._sync_meta_field_order(order_token))
+        label_entry.bind('<KeyRelease>', lambda e: self._sync_meta_field_order(order_token))
+        label_entry.bind('<FocusOut>', lambda e: self._sync_meta_field_order(order_token))
         
         # 값 입력 (텍스트 드래그 선택 기반 링크 지원)
         value_label_frame = tk.Frame(frame, bg=ModernStyle.BG_WHITE)
@@ -1914,18 +2391,27 @@ class ProjectEditorDialog(tk.Toplevel):
         tk.Label(value_label_frame, text="  (텍스트 드래그 후 우클릭 → 링크)", font=ModernStyle.get_font(7),
                 bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_MUTED).pack(side=tk.LEFT)
         
-        value_entry = tk.Entry(frame, font=ModernStyle.get_font(10),
+        value_entry = scrolledtext.ScrolledText(frame, height=3,
+                              font=ModernStyle.get_font(10),
                               bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_PRIMARY,
-                              relief='solid', borderwidth=1)
-        value_entry.insert(0, value)
-        value_entry.pack(fill=tk.X, pady=(2, 0), ipady=8)
-        value_entry.bind('<Button-3>', lambda e, ent=value_entry: self._show_entry_selection_menu(e, ent))
+                              relief='solid', borderwidth=1, wrap=tk.WORD)
+        value_entry.insert('1.0', value)
+        value_entry.pack(fill=tk.X, pady=(2, 0))
+        value_entry.bind('<Button-3>', lambda e, txt=value_entry: self._show_text_selection_menu(e, txt))
         
         # 구분선
         tk.Frame(frame, bg=ModernStyle.BORDER, height=1).pack(fill=tk.X, pady=(10, 0))
         
-        field_data = {'label_entry': label_entry, 'value_entry': value_entry, 'frame': frame}
+        field_data = {
+            'id': field_id,
+            'label_var': label_var,
+            'label_entry': label_entry,
+            'value_widget': value_entry,
+            'frame': frame,
+        }
         self.custom_field_widgets.append(field_data)
+        if not self._loading_custom_fields:
+            self._sync_meta_field_order(order_token)
         
         return field_data
     
@@ -2000,6 +2486,10 @@ class ProjectEditorDialog(tk.Toplevel):
                             font=ModernStyle.get_font(9), bg=ModernStyle.BG_WHITE,
                             fg=ModernStyle.ACCENT)
         drag_hint.pack(fill=tk.X, padx=20, pady=(0, 5))
+        tk.Label(scrollable,
+                text="같은 섹션 안에서도 썸네일을 드래그해서 순서를 바꿀 수 있습니다.",
+                font=ModernStyle.get_font(8), bg=ModernStyle.BG_WHITE,
+                fg=ModernStyle.TEXT_SUBTLE).pack(fill=tk.X, padx=20, pady=(0, 8))
         
         # 썸네일 이미지 (그리드용 정사각형)
         thumb_zone = DropZone(scrollable, 'thumb', 
@@ -3309,11 +3799,17 @@ class ProjectEditorDialog(tk.Toplevel):
         custom_fields = []
         if hasattr(self, 'custom_field_widgets'):
             for field_data in self.custom_field_widgets:
-                label = field_data['label_entry'].get().strip().upper()
+                label = self._get_custom_field_label(field_data)
+                if self._is_reserved_meta_label(label):
+                    continue
                 # 줄바꿈을 쉼표+공백으로 대체
-                value = field_data['value_entry'].get().strip().replace('\n', ', ').replace('\r', '')
+                value = self._get_custom_field_value(field_data).replace('\r\n', '\n').replace('\r', '').replace('\n', ', ')
                 if label and value:
-                    custom_fields.append({'label': label, 'value': value})
+                    custom_fields.append({
+                        'id': field_data['id'],
+                        'label': label,
+                        'value': value,
+                    })
         
         # 새 slug 결정
         new_slug = self.entries['slug'].get().strip() or title.lower().replace(' ', '-').replace('_', '-')
@@ -3337,11 +3833,12 @@ class ProjectEditorDialog(tk.Toplevel):
             'title': title,
             'slug': new_slug,
             'display_title': display_title,
-            'display_year': self.entries['display_year'].get().strip(),
-            'location': self.entries['location'].get().strip(),
-            'duration': self.entries['duration'].get().strip(),
-            'program': self.entries['program'].get().strip(),
-            'studio': self.entries['studio'].get().strip(),
+            'display_year': self.entries['display_year'].get().strip() if 'display_year' in self.entries else '',
+            'location': self.entries['location'].get().strip() if 'location' in self.entries else '',
+            'duration': self.entries['duration'].get().strip() if 'duration' in self.entries else '',
+            'program': self.entries['program'].get().strip() if 'program' in self.entries else '',
+            'studio': self.entries['studio'].get().strip() if 'studio' in self.entries else '',
+            'meta_field_order': list(self.meta_field_order),
             # 줄바꿈 보존 (JSON은 \n을 자동 이스케이프)
             'description': self.entries['description'].get('1.0', tk.END).strip().replace('\r\n', '\n').replace('\r', '\n'),
             'description_ko': self.entries['description_ko'].get('1.0', tk.END).strip().replace('\r\n', '\n').replace('\r', '\n'),
@@ -3353,6 +3850,11 @@ class ProjectEditorDialog(tk.Toplevel):
             'cover_zoom': self.pos_zoom if hasattr(self, 'pos_zoom') else 1.5,
             'custom_fields': custom_fields,
         }
+        self.result.update({
+            'year': self.entries['year'].get().strip() if 'year' in self.entries else '',
+            'medium': self.entries['medium'].get().strip() if 'medium' in self.entries else '',
+            'series': self.entries['series'].get().strip() if 'series' in self.entries else '',
+        })
         
         if self.on_save:
             self.on_save(self.result)
@@ -4555,7 +5057,8 @@ class AboutEditorDialog(tk.Toplevel):
             'instagram': '@herisharch',
             'education': [],
             'experience': [],
-            'exhibitions': []
+            'exhibitions': [],
+            'profile_image': ''
         }
         try:
             with open(ABOUT_HTML, 'r', encoding='utf-8') as f:
@@ -4579,6 +5082,10 @@ class AboutEditorDialog(tk.Toplevel):
                 self.data['affiliation'] = self._html_to_markdown(affiliation_html)
             
             # CONTACT 섹션에서 이메일과 인스타그램 파싱 (순서 기반)
+            match = re.search(r'<img[^>]*class="about-profile-image"[^>]*src="([^"]+)"', content)
+            if match:
+                self.data['profile_image'] = match.group(1).strip()
+
             contact_pattern = r'<h2 class="cv-heading">CONTACT</h2>\s*<ul class="cv-list-simple">([\s\S]*?)</ul>'
             contact_match = re.search(contact_pattern, content)
             if contact_match:
@@ -4699,6 +5206,7 @@ class AboutEditorDialog(tk.Toplevel):
                                    self.data.get('affiliation', ''))
         
         # === EDUCATION 섹션 ===
+        self._create_profile_image_field(scrollable)
         self._create_editable_section(scrollable, 'education', 'EDUCATION (학력)', self.data['education'])
         
         # === EXPERIENCE 섹션 ===
@@ -4730,6 +5238,32 @@ class AboutEditorDialog(tk.Toplevel):
         frame.pack(fill=tk.X, padx=20, pady=(15, 5))
         tk.Label(frame, text=title, font=ModernStyle.get_font(10, 'bold'),
                 bg=ModernStyle.BG_LIGHT, fg=ModernStyle.TEXT_PRIMARY).pack(anchor=tk.W, padx=10, pady=8)
+
+    def _create_profile_image_field(self, parent):
+        """About profile image selector UI."""
+        self._create_section_header(parent, "Profile Image")
+        frame = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        frame.pack(fill=tk.X, padx=20, pady=(6, 10))
+        self.profile_image_source_path = None
+        self.profile_image_path_var = tk.StringVar(value=self.data.get('profile_image', ''))
+        entry = tk.Entry(frame, textvariable=self.profile_image_path_var, font=ModernStyle.get_font(10),
+                         relief='solid', borderwidth=1, state='readonly')
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6)
+        tk.Button(frame, text="Select Image", font=ModernStyle.get_font(9),
+                  bg=ModernStyle.BG_LIGHT, fg=ModernStyle.TEXT_PRIMARY,
+                  relief='solid', borderwidth=1, padx=10,
+                  command=self._select_profile_image).pack(side=tk.LEFT, padx=(8, 0))
+
+    def _select_profile_image(self):
+        filetypes = [("Image files", "*.jpg *.jpeg *.png *.webp *.gif"), ("All files", "*.*")]
+        selected = filedialog.askopenfilename(title="Select profile image", filetypes=filetypes, parent=self)
+        if not selected:
+            return
+        self.profile_image_source_path = selected
+        src = Path(selected)
+        preview_name = f"images/about/profile_{datetime.now().strftime('%Y%m%d_%H%M%S')}{src.suffix.lower()}"
+        self.profile_image_path_var.set(preview_name)
+
     
     def _create_linkable_field(self, parent, key, label, value):
         """링크 편집 가능한 텍스트 필드 생성 - 텍스트 드래그 선택 지원"""
@@ -5207,6 +5741,32 @@ class AboutEditorDialog(tk.Toplevel):
             content = re.sub(r'<p class="about-affiliation">[\s\S]*?</p>',
                            f'<p class="about-affiliation">{affiliation_html}</p>', content)
             
+            # Profile image update
+            profile_image = self.data.get('profile_image', '').strip()
+            if hasattr(self, 'profile_image_source_path') and self.profile_image_source_path:
+                src_path = Path(self.profile_image_source_path)
+                if src_path.exists():
+                    about_image_dir = IMAGES_DIR / "about"
+                    about_image_dir.mkdir(parents=True, exist_ok=True)
+                    filename = f"profile_{datetime.now().strftime('%Y%m%d_%H%M%S')}{src_path.suffix.lower()}"
+                    dst_path = about_image_dir / filename
+                    shutil.copy2(src_path, dst_path)
+                    profile_image = f"images/about/{filename}".replace("\\", "/")
+                    self.profile_image_source_path = None
+            if profile_image:
+                img_tag = f'<img class="about-profile-image" src="{profile_image}" alt="Profile photo">'
+                content, replaced = re.subn(r'<img[^>]*class="about-profile-image"[^>]*>', img_tag, content, count=1)
+                if replaced == 0:
+                    content = re.sub(
+                        r'(<div class="about-profile-wrap">\s*)',
+                        rf'\1{img_tag}\n',
+                        content,
+                        count=1
+                    )
+                self.data['profile_image'] = profile_image
+                if hasattr(self, 'profile_image_path_var'):
+                    self.profile_image_path_var.set(profile_image)
+
             # EDUCATION 업데이트
             content = self._update_cv_section(content, 'EDUCATION', 'education')
             
@@ -5981,6 +6541,8 @@ class PortfolioAdminApp:
         self.projects = []
         self.search_var = tk.StringVar()
         self.search_var.trace('w', self.filter_list)
+        self._mobile_preview_server = None
+        self._mobile_preview_thread = None
         
         self.create_ui()
         self.load_data()
@@ -6024,7 +6586,7 @@ class PortfolioAdminApp:
                                    bg=ModernStyle.BG_WHITE, relief='solid', borderwidth=1,
                                    padx=10, pady=5, indicatoron=False)
         content_menu = tk.Menu(content_btn, tearoff=0, font=ModernStyle.get_font(10))
-        content_menu.add_command(label="🏠 홈페이지 편집", command=self.edit_home)
+        content_menu.add_command(label="🏠 홈화면 편집", command=self.edit_home)
         content_menu.add_command(label="📱 모바일 미리보기 (현재 탭)", command=self.open_mobile_preview)
         content_menu.add_command(label="📱 모바일 미리보기 (홈)", command=self.open_mobile_preview_home)
         content_menu.add_separator()
@@ -6375,8 +6937,23 @@ class PortfolioAdminApp:
             if str(p['index']) == idx:
                 return p, i
         return None, None
+
+    def _reload_current_projects_from_disk(self):
+        fresh_projects = self.get_section_data(self.current_html)
+        if isinstance(fresh_projects, list):
+            self.projects = fresh_projects
+        return self.projects
+
+    def _find_project_idx_by_index(self, project_index):
+        normalized_index = str(project_index).zfill(2)
+        for i, project in enumerate(self.projects):
+            if str(project.get('index', '')).zfill(2) == normalized_index:
+                return i
+        return None
     
     def add_project(self):
+        self._reload_current_projects_from_disk()
+
         # 고유한 임시 slug 생성 (timestamp 기반)
         import time
         temp_slug = f"new-project-{int(time.time())}"
@@ -6384,6 +6961,7 @@ class PortfolioAdminApp:
                'title': 'NEW PROJECT', 'slug': temp_slug, 'visible': True, '_is_new': True}
         
         def on_save(result):
+            self._reload_current_projects_from_disk()
             result['id'] = len(self.projects) + 1
             result['index'] = str(len(self.projects) + 1).zfill(2)
             self.projects.append(result)
@@ -6404,9 +6982,24 @@ class PortfolioAdminApp:
         if not project:
             messagebox.showwarning("경고", "편집할 항목을 선택하세요.")
             return
+
+        project_index = project.get('index')
+        self._reload_current_projects_from_disk()
+        fresh_idx = self._find_project_idx_by_index(project_index)
+        if fresh_idx is None:
+            messagebox.showwarning("경고", "현재 데이터를 다시 불러오지 못했습니다.")
+            return
+
+        project = copy.deepcopy(self.projects[fresh_idx])
         
         def on_save(result):
-            self.projects[idx].update(result)
+            self._reload_current_projects_from_disk()
+            target_idx = self._find_project_idx_by_index(project_index)
+            if target_idx is None:
+                messagebox.showwarning("경고", "저장할 프로젝트를 찾을 수 없습니다.")
+                return
+
+            self.projects[target_idx].update(result)
             self.save_data()
             self.load_data()
             self.status_var.set(f"'{result['title']}' 수정됨")
@@ -6505,7 +7098,7 @@ class PortfolioAdminApp:
         
         self._drag_data = {"item": None, "index": None}
     
-    def cleanup_files(self):
+    def cleanup_files_legacy(self):
         """이미지 파일 정리 - 중복 및 미사용 파일 제거"""
         if not messagebox.askyesno("파일 정리", 
             "프로젝트 폴더의 중복 파일 및 미사용 파일을 정리합니다.\n\n"
@@ -6605,6 +7198,121 @@ class PortfolioAdminApp:
         
         self.save_data()
         self.load_data()
+
+    def cleanup_files(self):
+        """이미지 파일 정리 - 중복/임시 파일, 빈 폴더, 미사용 프로젝트 폴더 제거"""
+        if not messagebox.askyesno(
+            "파일 정리",
+            "프로젝트 폴더의 이미지 파일을 정리합니다.\n\n"
+            "다음 작업을 수행합니다.\n"
+            "• 하위 이미지 번호 재정렬\n"
+            "• 임시 파일 삭제\n"
+            "• 빈 폴더 삭제\n"
+            "• 홈페이지에 연결되지 않은 프로젝트 폴더 삭제\n\n"
+            "계속하시겠습니까?"
+        ):
+            return
+
+        project_type = self.current_mode if self.current_mode in ['drawings', 'graphics'] else 'projects'
+        base_folder = IMAGES_DIR / project_type
+        if not base_folder.exists():
+            messagebox.showinfo("완료", "정리할 이미지 폴더가 없습니다.")
+            self.status_var.set("파일 정리 완료 (대상 폴더 없음)")
+            return
+
+        referenced_slugs = {
+            str(project.get('slug', '')).strip()
+            for project in self.projects
+            if str(project.get('slug', '')).strip()
+        }
+
+        cleaned = 0
+        errors = 0
+        removed_folders = []
+
+        for project in self.projects:
+            slug = str(project.get('slug', '')).strip()
+            if not slug:
+                continue
+
+            folder = base_folder / slug
+            if not folder.exists():
+                continue
+
+            try:
+                sub_images = sorted(
+                    [f for f in folder.glob("[0-9][0-9].*")
+                     if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.webp']]
+                )
+                for i, img in enumerate(sub_images, 1):
+                    new_name = f"{str(i).zfill(2)}{img.suffix}"
+                    new_path = folder / new_name
+                    if img.name != new_name:
+                        if new_path.exists() and new_path != img:
+                            temp_path = folder / f"_temp_{img.name}"
+                            shutil.move(str(img), str(temp_path))
+                            img = temp_path
+                        shutil.move(str(img), str(new_path))
+                        cleaned += 1
+
+                model_folder = folder / "model_images"
+                if model_folder.exists():
+                    model_images = sorted(
+                        [f for f in model_folder.glob("*.*")
+                         if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.webp']],
+                        key=lambda x: int(''.join(filter(str.isdigit, x.stem)) or 0)
+                    )
+                    for i, img in enumerate(model_images, 1):
+                        new_name = f"{i}{img.suffix}"
+                        new_path = model_folder / new_name
+                        if img.name != new_name:
+                            if new_path.exists() and new_path != img:
+                                temp_path = model_folder / f"_temp_{img.name}"
+                                shutil.move(str(img), str(temp_path))
+                                img = temp_path
+                            shutil.move(str(img), str(new_path))
+                            cleaned += 1
+
+                for temp in folder.glob("_temp_*"):
+                    os.remove(str(temp))
+                    cleaned += 1
+
+            except Exception as e:
+                print(f"폴더 정리 오류 ({slug}): {e}")
+                errors += 1
+
+        for folder in base_folder.iterdir():
+            if folder.is_dir() and not any(folder.iterdir()):
+                try:
+                    folder.rmdir()
+                    cleaned += 1
+                except Exception:
+                    pass
+
+        for folder in base_folder.iterdir():
+            if not folder.is_dir():
+                continue
+            if folder.name in referenced_slugs:
+                continue
+            try:
+                shutil.rmtree(folder)
+                cleaned += 1
+                removed_folders.append(folder.name)
+            except Exception as e:
+                print(f"미사용 프로젝트 폴더 삭제 오류 ({folder.name}): {e}")
+                errors += 1
+
+        msg = f"파일 정리 완료\n정리된 항목: {cleaned}개"
+        if removed_folders:
+            preview = ", ".join(removed_folders[:8])
+            if len(removed_folders) > 8:
+                preview += f" 외 {len(removed_folders) - 8}개"
+            msg += f"\n삭제된 미사용 프로젝트 폴더: {len(removed_folders)}개\n({preview})"
+        if errors > 0:
+            msg += f"\n오류: {errors}개"
+
+        messagebox.showinfo("완료", msg)
+        self.status_var.set(f"파일 정리 완료 ({cleaned}개 항목)")
     
     def _reindex(self):
         for i, p in enumerate(self.projects):
@@ -6626,15 +7334,131 @@ class PortfolioAdminApp:
     
     def preview(self):
         webbrowser.open(f'file:///{self.current_html}')
-    
+
+    def _is_valid_lan_ip(self, ip: str) -> bool:
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        if addr.version != 4:
+            return False
+        return not (
+            addr.is_loopback
+            or addr.is_link_local
+            or addr.is_multicast
+            or addr.is_unspecified
+        )
+
+    def _collect_lan_ips(self):
+        """현재 장치에서 추정 가능한 LAN IPv4 목록을 우선순위로 수집."""
+        candidates = []
+        seen = set()
+
+        def add_candidate(ip: str, base_priority: int):
+            if not ip:
+                return
+            ip = str(ip).strip()
+            if not self._is_valid_lan_ip(ip) or ip in seen:
+                return
+            seen.add(ip)
+            try:
+                addr = ipaddress.ip_address(ip)
+                priority = base_priority if addr.is_private else base_priority + 50
+            except ValueError:
+                priority = base_priority + 100
+            candidates.append((priority, ip))
+
+        for probe in ("8.8.8.8", "1.1.1.1", "192.168.0.1", "10.0.0.1"):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.connect((probe, 80))
+                    add_candidate(sock.getsockname()[0], 10)
+            except Exception:
+                pass
+
+        try:
+            for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+                add_candidate(ip, 30)
+        except Exception:
+            pass
+
+        # Windows 환경에서 Wi-Fi/Ethernet의 실제 IPv4를 보강 수집.
+        for encoding in ("utf-8", "cp949"):
+            try:
+                out = subprocess.check_output(
+                    ["ipconfig"], text=True, encoding=encoding, errors="ignore"
+                )
+                for line in out.splitlines():
+                    txt = line.strip()
+                    if "IPv4" in txt and ":" in txt:
+                        add_candidate(txt.split(":", 1)[1].strip(), 20)
+                break
+            except Exception:
+                continue
+
+        candidates.sort(key=lambda item: item[0])
+        return [ip for _, ip in candidates]
+
+    def _get_lan_ip(self):
+        """같은 Wi-Fi 기기에서 접근 가능한 LAN IP를 추정."""
+        lan_ips = self._collect_lan_ips()
+        return lan_ips[0] if lan_ips else "127.0.0.1"
+
+    def _ensure_mobile_preview_server(self):
+        """정적 파일 서빙용 로컬 HTTP 서버를 시작/재사용."""
+        server = self._mobile_preview_server
+        thread = self._mobile_preview_thread
+        if server and thread and thread.is_alive():
+            port = int(server.server_address[1])
+            return f"http://127.0.0.1:{port}", f"http://{self._get_lan_ip()}:{port}"
+
+        class _QuietStaticHandler(SimpleHTTPRequestHandler):
+            def log_message(self, format, *args):  # noqa: A003
+                return
+
+        handler = partial(_QuietStaticHandler, directory=str(SCRIPT_DIR))
+        server = ThreadingHTTPServer(("0.0.0.0", 0), handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        self._mobile_preview_server = server
+        self._mobile_preview_thread = thread
+        port = int(server.server_address[1])
+        return f"http://127.0.0.1:{port}", f"http://{self._get_lan_ip()}:{port}"
+
     def _open_mobile_preview_for(self, html_file: Path):
         preview_file = SCRIPT_DIR / "mobile_preview.html"
         if not preview_file.exists():
             messagebox.showerror("오류", "mobile_preview.html 파일을 찾을 수 없습니다.")
             return
         target_name = html_file.name
-        url = f"{preview_file.as_uri()}?page={quote(target_name)}"
-        webbrowser.open(url)
+        target_encoded = quote(target_name, safe="")
+        try:
+            local_base, lan_base = self._ensure_mobile_preview_server()
+            share_url = f"{lan_base}/{target_encoded}"
+            url = (
+                f"{local_base}/mobile_preview.html?page={target_encoded}"
+                f"&share={quote(share_url, safe='')}"
+            )
+            webbrowser.open(url)
+            self.status_var.set(f"모바일 링크 준비됨: {share_url} (같은 Wi-Fi에서 접속)")
+            if share_url.startswith("http://127.0.0.1:"):
+                messagebox.showwarning(
+                    "모바일 접속 안내",
+                    "LAN IP를 찾지 못해 127.0.0.1 링크가 생성되었습니다.\n"
+                    "같은 Wi-Fi라도 휴대폰에서는 접속할 수 없습니다.\n\n"
+                    "확인할 항목:\n"
+                    "1) PC/휴대폰이 같은 Wi-Fi(게스트망 아님)인지\n"
+                    "2) Windows 방화벽에서 Python 앱의 사설망 허용 여부",
+                )
+        except Exception as e:
+            fallback_url = f"{preview_file.as_uri()}?page={target_encoded}"
+            webbrowser.open(fallback_url)
+            messagebox.showwarning(
+                "모바일 미리보기",
+                f"호스트 서버 실행 실패로 파일 방식으로 열었습니다.\n\n{e}",
+            )
     
     def open_mobile_preview(self):
         self._open_mobile_preview_for(self.current_html)
@@ -7522,6 +8346,2467 @@ class MagazineEditorDialog(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("오류", f"저장 중 오류가 발생했습니다:\n{e}")
 
+def _install_home_editor_overrides():
+    """Enhance HomeManagerDialog with advanced split-home editor controls."""
+
+    def _home_defaults():
+        return {
+            "hero_title": "J-HR",
+            "hero_link": "projects.html",
+            "hero_slogan": "DESIGN ANYTHING",
+            "hero_image": "",
+            "hero_image_size": 85,
+            "hero_image_max_height_vh": 50,
+            "hero_image_opacity": 100,
+            "hero_image_position": "center",
+            "hero_image_rotation_deg": 0,
+            "hero_text_margin_top": 50,
+            "hero_text_gap": 12,
+            "show_title": True,
+            "show_slogan": True,
+            "title_size_rem": 1.5,
+            "slogan_size_rem": 1.0,
+            "slogan_letter_spacing_em": 0.0,
+            "title_font_family": "Inter, sans-serif",
+            "slogan_font_family": "Cormorant Garamond, Georgia, serif",
+            "header_bg_color": "#000000",
+            "text_color": "#ffffff",
+            "overlay_strength": 0.0,
+            "text_align": "center",
+            "animation_enabled": True,
+            "animation_duration_s": 1.0,
+        }
+
+    def load_home_data(self):
+        defaults = _home_defaults()
+        if HOME_DATA_JSON.exists():
+            try:
+                with open(HOME_DATA_JSON, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    merged = defaults.copy()
+                    merged.update(data)
+                    return merged
+            except Exception:
+                pass
+        return defaults
+
+    def _add_labeled_scale(self, parent, text, var, frm, to, callback, resolution=1):
+        tk.Label(parent, text=text, font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(anchor="w", pady=(8, 0))
+        scale = tk.Scale(
+            parent,
+            from_=frm,
+            to=to,
+            resolution=resolution,
+            orient=tk.HORIZONTAL,
+            variable=var,
+            length=280,
+            bg=ModernStyle.BG_WHITE,
+            highlightthickness=0,
+            command=lambda _v: callback(),
+        )
+        scale.pack(fill=tk.X, pady=(2, 6))
+        return scale
+
+    def _add_labeled_combo(self, parent, text, var, options):
+        row = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        row.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(row, text=text, width=14, anchor="w", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT)
+        combo = ttk.Combobox(row, textvariable=var, values=options, state="readonly", width=26)
+        combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        combo.bind("<<ComboboxSelected>>", lambda _e: self.update_preview())
+        return combo
+
+    def create_text_tab(self, parent):
+        wrap = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        self.hero_title_var = tk.StringVar()
+        self.hero_link_var = tk.StringVar()
+        self.hero_slogan_var = tk.StringVar()
+        self.header_bg_var = tk.StringVar()
+        self.text_color_var = tk.StringVar()
+        self.show_title_var = tk.BooleanVar(value=True)
+        self.show_slogan_var = tk.BooleanVar(value=True)
+        self.text_align_var = tk.StringVar(value="center")
+        self.animation_enabled_var = tk.BooleanVar(value=True)
+        self.title_font_var = tk.StringVar(value="Inter")
+        self.slogan_font_var = tk.StringVar(value="Cormorant")
+
+        for label, var in [
+            ("메인 타이틀", self.hero_title_var),
+            ("타이틀 링크", self.hero_link_var),
+            ("슬로건", self.hero_slogan_var),
+            ("배경색(HEX)", self.header_bg_var),
+            ("텍스트색(HEX)", self.text_color_var),
+        ]:
+            row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+            row.pack(fill=tk.X, pady=4)
+            tk.Label(row, text=label, width=14, anchor="w", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT)
+            ent = tk.Entry(row, textvariable=var, font=ModernStyle.get_font(10), relief="solid", borderwidth=1)
+            ent.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+            ent.bind("<KeyRelease>", lambda _e: self.update_preview())
+
+        self._add_labeled_combo(wrap, "타이틀 폰트", self.title_font_var, list(self.font_options.keys()))
+        self._add_labeled_combo(wrap, "슬로건 폰트", self.slogan_font_var, list(self.font_options.keys()))
+
+        options_row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        options_row.pack(fill=tk.X, pady=(8, 2))
+        tk.Checkbutton(options_row, text="타이틀 표시", variable=self.show_title_var, bg=ModernStyle.BG_WHITE,
+                       command=self.update_preview).pack(side=tk.LEFT, padx=(0, 12))
+        tk.Checkbutton(options_row, text="슬로건 표시", variable=self.show_slogan_var, bg=ModernStyle.BG_WHITE,
+                       command=self.update_preview).pack(side=tk.LEFT, padx=(0, 12))
+        tk.Checkbutton(options_row, text="애니메이션 사용", variable=self.animation_enabled_var, bg=ModernStyle.BG_WHITE,
+                       command=self.update_preview).pack(side=tk.LEFT)
+
+        align_row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        align_row.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(align_row, text="텍스트 정렬", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT, padx=(0, 12))
+        for t, v in [("왼쪽", "left"), ("가운데", "center"), ("오른쪽", "right")]:
+            tk.Radiobutton(align_row, text=t, value=v, variable=self.text_align_var,
+                           bg=ModernStyle.BG_WHITE, command=self.update_preview).pack(side=tk.LEFT, padx=(0, 8))
+
+        self.title_size_var = tk.DoubleVar(value=15)
+        self.slogan_size_var = tk.DoubleVar(value=10)
+        self.slogan_spacing_var = tk.DoubleVar(value=0)
+        self.hero_text_gap_var = tk.IntVar(value=12)
+        self.animation_duration_var = tk.DoubleVar(value=10)
+        self.overlay_strength_var = tk.IntVar(value=0)
+
+        self._add_labeled_scale(wrap, "타이틀 크기 (x0.1rem)", self.title_size_var, 10, 40, self.update_preview)
+        self._add_labeled_scale(wrap, "슬로건 크기 (x0.1rem)", self.slogan_size_var, 7, 30, self.update_preview)
+        self._add_labeled_scale(wrap, "슬로건 자간 (x0.01em)", self.slogan_spacing_var, -20, 30, self.update_preview)
+        self._add_labeled_scale(wrap, "타이틀-슬로건 간격(px)", self.hero_text_gap_var, 0, 60, self.update_preview)
+        self._add_labeled_scale(wrap, "애니메이션 속도 (x0.1s)", self.animation_duration_var, 2, 30, self.update_preview)
+        self._add_labeled_scale(wrap, "오버레이 강도(%)", self.overlay_strength_var, 0, 70, self.update_preview)
+
+    def create_image_tab(self, parent):
+        wrap = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        btn_row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        btn_row.pack(fill=tk.X, pady=(0, 8))
+        tk.Button(btn_row, text="이미지 불러오기", font=ModernStyle.get_font(10), bg=ModernStyle.BG_LIGHT,
+                  relief="solid", borderwidth=1, padx=12, pady=6, command=self.load_image).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(btn_row, text="이미지 제거", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE,
+                  relief="solid", borderwidth=1, padx=12, pady=6, command=self.remove_image).pack(side=tk.LEFT)
+
+        self.image_path_label = tk.Label(wrap, text="선택된 이미지 없음", font=ModernStyle.get_font(9),
+                                         bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE)
+        self.image_path_label.pack(anchor="w", pady=(0, 8))
+        self.size_var = tk.IntVar(value=85)
+        self.height_var = tk.IntVar(value=50)
+        self.opacity_var = tk.IntVar(value=100)
+        self.position_var = tk.StringVar(value="center")
+        self.text_margin_var = tk.IntVar(value=50)
+        self.rotation_var = tk.IntVar(value=0)
+        self._add_labeled_scale(wrap, "이미지 너비(%)", self.size_var, 20, 120, self.update_preview)
+        self._add_labeled_scale(wrap, "이미지 최대 높이(vh)", self.height_var, 20, 90, self.update_preview)
+        self._add_labeled_scale(wrap, "이미지 투명도(%)", self.opacity_var, 10, 100, self.update_preview)
+        self._add_labeled_scale(wrap, "이미지 회전(도)", self.rotation_var, -15, 15, self.update_preview)
+        self._add_labeled_scale(wrap, "이미지 아래 텍스트 여백(px)", self.text_margin_var, 0, 140, self.update_preview)
+        pos_row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        pos_row.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(pos_row, text="이미지 위치", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT, padx=(0, 12))
+        for txt, val in [("왼쪽", "left"), ("가운데", "center"), ("오른쪽", "right")]:
+            tk.Radiobutton(pos_row, text=txt, value=val, variable=self.position_var,
+                           bg=ModernStyle.BG_WHITE, command=self.update_preview).pack(side=tk.LEFT, padx=(0, 8))
+
+    def create_ui(self):
+        self.font_options = {
+            "Inter": "Inter, sans-serif",
+            "Cormorant": "Cormorant Garamond, Georgia, serif",
+            "Arial": "Arial, sans-serif",
+            "Georgia": "Georgia, serif",
+            "Times": "Times New Roman, serif",
+            "Verdana": "Verdana, sans-serif",
+        }
+        main = tk.Frame(self, bg=ModernStyle.BG_WHITE)
+        main.pack(fill=tk.BOTH, expand=True, padx=26, pady=18)
+        tk.Label(main, text="홈화면 편집", font=ModernStyle.get_font(16, "bold"), bg=ModernStyle.BG_WHITE).pack(anchor="w")
+        tk.Label(main, text="폰트/애니메이션/정렬/색상/히어로 이미지를 편집하고 실시간 미리보기를 확인합니다.",
+                 font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_MUTED).pack(anchor="w", pady=(2, 14))
+
+        body = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        body.pack(fill=tk.BOTH, expand=True)
+        controls = tk.Frame(body, bg=ModernStyle.BG_WHITE)
+        controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 14))
+        preview_panel = tk.Frame(body, bg=ModernStyle.BG_LIGHT, relief="solid", borderwidth=1)
+        preview_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        notebook = ttk.Notebook(controls)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        design_tab = tk.Frame(notebook, bg=ModernStyle.BG_WHITE)
+        notebook.add(design_tab, text="디자인")
+        self.create_text_tab(design_tab)
+        image_tab = tk.Frame(notebook, bg=ModernStyle.BG_WHITE)
+        notebook.add(image_tab, text="이미지")
+        self.create_image_tab(image_tab)
+
+        tk.Label(preview_panel, text="실시간 미리보기", font=ModernStyle.get_font(10, "bold"),
+                 bg=ModernStyle.BG_LIGHT, fg=ModernStyle.TEXT_MUTED).pack(pady=10)
+        self.preview_canvas = tk.Canvas(preview_panel, bg="#111111", width=500, height=380,
+                                        highlightthickness=1, highlightbackground=ModernStyle.BORDER)
+        self.preview_canvas.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+
+        btn_row = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        btn_row.pack(fill=tk.X, pady=(14, 0))
+        tk.Button(btn_row, text="기본값 초기화", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE,
+                  relief="solid", borderwidth=1, padx=14, pady=8, command=self.reset_defaults).pack(side=tk.LEFT)
+        tk.Button(btn_row, text="미리보기 열기", font=ModernStyle.get_font(10), bg=ModernStyle.BG_LIGHT,
+                  relief="solid", borderwidth=1, padx=16, pady=8, command=self.preview).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_row, text="취소", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE,
+                  relief="solid", borderwidth=1, padx=16, pady=8, command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_row, text="저장", font=ModernStyle.get_font(10, "bold"), bg=ModernStyle.ACCENT,
+                  fg=ModernStyle.BG_WHITE, relief="flat", padx=20, pady=8, command=self.save).pack(side=tk.RIGHT)
+
+    def load_current_values(self):
+        self.hero_title_var.set(self.home_data.get("hero_title", "J-HR"))
+        self.hero_link_var.set(self.home_data.get("hero_link", "projects.html"))
+        self.hero_slogan_var.set(self.home_data.get("hero_slogan", "DESIGN ANYTHING"))
+        self.header_bg_var.set(self.home_data.get("header_bg_color", "#000000"))
+        self.text_color_var.set(self.home_data.get("text_color", "#ffffff"))
+        self.show_title_var.set(self.home_data.get("show_title", True))
+        self.show_slogan_var.set(self.home_data.get("show_slogan", True))
+        self.text_align_var.set(self.home_data.get("text_align", "center"))
+        self.animation_enabled_var.set(self.home_data.get("animation_enabled", True))
+        self.overlay_strength_var.set(int(self.home_data.get("overlay_strength", 0.0) * 100))
+        self.title_size_var.set(float(self.home_data.get("title_size_rem", 1.5)) * 10)
+        self.slogan_size_var.set(float(self.home_data.get("slogan_size_rem", 1.0)) * 10)
+        self.slogan_spacing_var.set(float(self.home_data.get("slogan_letter_spacing_em", 0.0)) * 100)
+        self.hero_text_gap_var.set(int(self.home_data.get("hero_text_gap", 12)))
+        self.animation_duration_var.set(float(self.home_data.get("animation_duration_s", 1.0)) * 10)
+        self.size_var.set(int(self.home_data.get("hero_image_size", 85)))
+        self.height_var.set(int(self.home_data.get("hero_image_max_height_vh", 50)))
+        self.opacity_var.set(int(self.home_data.get("hero_image_opacity", 100)))
+        self.position_var.set(str(self.home_data.get("hero_image_position", "center")))
+        self.rotation_var.set(int(self.home_data.get("hero_image_rotation_deg", 0)))
+        self.text_margin_var.set(int(self.home_data.get("hero_text_margin_top", 50)))
+
+        title_font = self.home_data.get("title_font_family", "Inter, sans-serif")
+        slogan_font = self.home_data.get("slogan_font_family", "Cormorant Garamond, Georgia, serif")
+        self.title_font_var.set(next((k for k, v in self.font_options.items() if v == title_font), "Inter"))
+        self.slogan_font_var.set(next((k for k, v in self.font_options.items() if v == slogan_font), "Cormorant"))
+
+        hero_image = self.home_data.get("hero_image", "")
+        if hero_image and Path(SCRIPT_DIR / hero_image).exists():
+            self.image_path = str(SCRIPT_DIR / hero_image)
+            self.image_path_label.config(text=f"현재: {hero_image}")
+            self.load_preview_image()
+        else:
+            self.image_preview = None
+        self.update_preview()
+
+    def load_image(self):
+        filetypes = [("이미지 파일", "*.jpg *.jpeg *.png *.webp *.gif"), ("모든 파일", "*.*")]
+        path = filedialog.askopenfilename(title="히어로 이미지 선택", filetypes=filetypes)
+        if not path:
+            return
+        src = Path(path)
+        dest = HOME_IMAGES_DIR / f"hero{src.suffix}"
+        try:
+            shutil.copy2(src, dest)
+            self.image_path = str(dest)
+            self.image_path_label.config(text=f"현재: images/home/hero{src.suffix}")
+            self.load_preview_image()
+            self.update_preview()
+        except Exception as e:
+            messagebox.showerror("오류", f"이미지 복사 실패: {str(e)}")
+
+    def remove_image(self):
+        self.image_path = None
+        self.image_preview = None
+        self.preview_scaled_image = None
+        self.image_path_label.config(text="선택된 이미지 없음")
+        self.update_preview()
+
+    def load_preview_image(self):
+        if not self.image_path or not Path(self.image_path).exists():
+            self.image_preview = None
+            return
+        try:
+            self.image_preview = Image.open(self.image_path).convert("RGBA")
+        except Exception:
+            self.image_preview = None
+
+    def _normalize_hex(self, color, fallback):
+        value = str(color or "").strip()
+        if not value.startswith("#"):
+            return fallback
+        if len(value) == 4 and all(c in "0123456789abcdefABCDEF" for c in value[1:]):
+            return value
+        if len(value) == 7 and all(c in "0123456789abcdefABCDEF" for c in value[1:]):
+            return value
+        return fallback
+
+    def update_preview(self, *args):
+        if not hasattr(self, "preview_canvas"):
+            return
+        canvas_w = max(int(self.preview_canvas.winfo_width()), 500)
+        canvas_h = max(int(self.preview_canvas.winfo_height()), 380)
+        bg_color = self._normalize_hex(self.header_bg_var.get(), "#000000")
+        text_color = self._normalize_hex(self.text_color_var.get(), "#ffffff")
+        overlay_strength = max(0.0, min(0.7, self.overlay_strength_var.get() / 100.0))
+
+        self.preview_canvas.delete("all")
+        self.preview_canvas.configure(bg=bg_color)
+        self.preview_canvas.create_rectangle(0, 0, canvas_w, canvas_h, fill=bg_color, outline="")
+
+        img_top = 30
+        img_bottom = canvas_h * 0.45
+        if self.image_preview is not None:
+            desired_w = max(40, int(canvas_w * (self.size_var.get() / 100.0)))
+            desired_h = max(40, int(canvas_h * (self.height_var.get() / 100.0)))
+            img = self.image_preview.copy()
+            if self.rotation_var.get():
+                img = img.rotate(-self.rotation_var.get(), expand=True)
+            img.thumbnail((desired_w, desired_h), Image.Resampling.LANCZOS)
+            alpha_ratio = max(0.1, min(1.0, self.opacity_var.get() / 100.0))
+            alpha = img.split()[-1].point(lambda p: int(p * alpha_ratio))
+            img.putalpha(alpha)
+            self.preview_scaled_image = ImageTk.PhotoImage(img)
+            img_w, img_h = img.size
+            pos = self.position_var.get()
+            if pos == "left":
+                x = 18 + img_w // 2
+            elif pos == "right":
+                x = canvas_w - 18 - img_w // 2
+            else:
+                x = canvas_w // 2
+            y = img_top + img_h // 2
+            img_bottom = y + img_h // 2
+            self.preview_canvas.create_image(x, y, image=self.preview_scaled_image)
+        else:
+            ph_w = int(canvas_w * 0.52)
+            ph_h = int(canvas_h * 0.22)
+            x1 = (canvas_w - ph_w) // 2
+            y1 = img_top
+            x2 = x1 + ph_w
+            y2 = y1 + ph_h
+            img_bottom = y2
+            self.preview_canvas.create_rectangle(x1, y1, x2, y2, outline="#6d6d6d", dash=(4, 4))
+            self.preview_canvas.create_text((x1 + x2) // 2, (y1 + y2) // 2, fill="#999999", text="HERO IMAGE")
+
+        if overlay_strength > 0:
+            alpha_hex = format(int(overlay_strength * 255), "02x")
+            self.preview_canvas.create_rectangle(0, 0, canvas_w, canvas_h, fill=f"#000000{alpha_hex}", outline="")
+
+        title_y = int(img_bottom + self.text_margin_var.get() * 0.35 + 24)
+        title_font = max(10, int(float(self.title_size_var.get()) * 2.0))
+        slogan_font = max(9, int(float(self.slogan_size_var.get()) * 2.0))
+        gap = int(self.hero_text_gap_var.get())
+        align = self.text_align_var.get()
+        if align == "left":
+            tx = 36
+            anchor = "w"
+        elif align == "right":
+            tx = canvas_w - 36
+            anchor = "e"
+        else:
+            tx = canvas_w // 2
+            anchor = "center"
+        if self.show_title_var.get():
+            self.preview_canvas.create_text(tx, title_y, text=self.hero_title_var.get().strip() or "J-HR",
+                                            fill=text_color, anchor=anchor, font=("Segoe UI", title_font, "bold"))
+        if self.show_slogan_var.get():
+            self.preview_canvas.create_text(tx, title_y + gap + 12, text=self.hero_slogan_var.get().strip() or "DESIGN ANYTHING",
+                                            fill=text_color, anchor=anchor, font=("Georgia", slogan_font, "normal"))
+
+    def reset_defaults(self):
+        self.home_data = _home_defaults()
+        self.load_current_values()
+
+    def save(self, preview_only=False):
+        try:
+            data = {
+                "hero_title": self.hero_title_var.get().strip() or "J-HR",
+                "hero_link": self.hero_link_var.get().strip() or "projects.html",
+                "hero_slogan": self.hero_slogan_var.get().strip() or "DESIGN ANYTHING",
+                "hero_image": "",
+                "hero_image_size": int(self.size_var.get()),
+                "hero_image_max_height_vh": int(self.height_var.get()),
+                "hero_image_opacity": int(self.opacity_var.get()),
+                "hero_image_position": self.position_var.get(),
+                "hero_image_rotation_deg": int(self.rotation_var.get()),
+                "hero_text_margin_top": int(self.text_margin_var.get()),
+                "hero_text_gap": int(self.hero_text_gap_var.get()),
+                "show_title": bool(self.show_title_var.get()),
+                "show_slogan": bool(self.show_slogan_var.get()),
+                "title_size_rem": round(float(self.title_size_var.get()) / 10.0, 2),
+                "slogan_size_rem": round(float(self.slogan_size_var.get()) / 10.0, 2),
+                "slogan_letter_spacing_em": round(float(self.slogan_spacing_var.get()) / 100.0, 3),
+                "title_font_family": self.font_options.get(self.title_font_var.get(), "Inter, sans-serif"),
+                "slogan_font_family": self.font_options.get(self.slogan_font_var.get(), "Cormorant Garamond, Georgia, serif"),
+                "header_bg_color": self._normalize_hex(self.header_bg_var.get(), "#000000"),
+                "text_color": self._normalize_hex(self.text_color_var.get(), "#ffffff"),
+                "overlay_strength": max(0.0, min(0.7, self.overlay_strength_var.get() / 100.0)),
+                "text_align": self.text_align_var.get(),
+                "animation_enabled": bool(self.animation_enabled_var.get()),
+                "animation_duration_s": round(float(self.animation_duration_var.get()) / 10.0, 2),
+            }
+            if self.image_path and Path(self.image_path).exists():
+                rel_path = Path(self.image_path).relative_to(SCRIPT_DIR)
+                data["hero_image"] = str(rel_path).replace("\\", "/")
+            with open(HOME_DATA_JSON, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            self.update_index_html(data)
+            if not preview_only:
+                messagebox.showinfo("저장 완료", "홈화면 편집 내용이 저장되었습니다.")
+                self.destroy()
+        except Exception as e:
+            messagebox.showerror("오류", f"저장 실패: {str(e)}")
+
+    def update_index_html(self, data):
+        if not INDEX_HTML.exists():
+            return
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html_text = f.read()
+
+        def clamp_int(value, minimum, maximum, default):
+            try:
+                num = int(value)
+            except Exception:
+                return default
+            return max(minimum, min(maximum, num))
+
+        def clamp_float(value, minimum, maximum, default):
+            try:
+                num = float(value)
+            except Exception:
+                return default
+            return max(minimum, min(maximum, num))
+
+        title = html.escape(data.get("hero_title", "J-HR"))
+        link = html.escape(data.get("hero_link", "projects.html"), quote=True)
+        slogan = html.escape(data.get("hero_slogan", "DESIGN ANYTHING"))
+        image_src = html.escape((data.get("hero_image", "").strip() or "images/home/main_page_image.png"), quote=True)
+        bg_color = self._normalize_hex(data.get("header_bg_color", "#000000"), "#000000")
+        text_color = self._normalize_hex(data.get("text_color", "#ffffff"), "#ffffff")
+        title_font = str(data.get("title_font_family", "Inter, sans-serif"))
+        slogan_font = str(data.get("slogan_font_family", "Cormorant Garamond, Georgia, serif"))
+        size = clamp_int(data.get("hero_image_size", 85), 20, 120, 85)
+        max_h = clamp_int(data.get("hero_image_max_height_vh", 50), 20, 90, 50)
+        opacity = clamp_int(data.get("hero_image_opacity", 100), 10, 100, 100) / 100.0
+        rotation = clamp_int(data.get("hero_image_rotation_deg", 0), -15, 15, 0)
+        margin_top = clamp_int(data.get("hero_text_margin_top", 50), 0, 140, 50)
+        gap = clamp_int(data.get("hero_text_gap", 12), 0, 60, 12)
+        title_size = clamp_float(data.get("title_size_rem", 1.5), 0.8, 4.0, 1.5)
+        slogan_size = clamp_float(data.get("slogan_size_rem", 1.0), 0.7, 3.0, 1.0)
+        slogan_spacing = clamp_float(data.get("slogan_letter_spacing_em", 0.0), -0.3, 0.6, 0.0)
+        overlay_strength = clamp_float(data.get("overlay_strength", 0.0), 0.0, 0.7, 0.0)
+        anim_enabled = data.get("animation_enabled", True) is True
+        anim_duration = clamp_float(data.get("animation_duration_s", 1.0), 0.2, 3.0, 1.0)
+        align = str(data.get("text_align", "center")).strip().lower()
+        if align not in {"left", "center", "right"}:
+            align = "center"
+        align_items = "flex-start" if align == "left" else "flex-end" if align == "right" else "center"
+        position = str(data.get("hero_image_position", "center")).strip().lower()
+        if position not in {"left", "center", "right"}:
+            position = "center"
+
+        title_display = "" if data.get("show_title", True) else "display:none;"
+        slogan_display = "" if data.get("show_slogan", True) else "display:none;"
+        anim_off_rule = ".split-hero-img,.split-hero-text{opacity:1!important;transform:none!important;}" if not anim_enabled else ""
+        overlay_rule = (
+            f'.split-header::after{{content:"";position:absolute;inset:0;background:rgba(0,0,0,{round(overlay_strength,3)});pointer-events:none;}}'
+            if overlay_strength > 0
+            else ".split-header::after{content:none;}"
+        )
+        dynamic_style = (
+            '<style id="homeEditorDynamicStyle">'
+            f".split-header{{background:{bg_color}!important;}}"
+            f".split-hero-text{{margin-top:{margin_top}px!important;gap:{gap}px!important;align-items:{align_items}!important;text-align:{align}!important;}}"
+            f".split-hero-title-link{{color:{text_color}!important;font-size:{title_size}rem!important;font-family:{title_font}!important;{title_display}}}"
+            f".split-hero-slogan{{color:{text_color}!important;font-size:{slogan_size}rem!important;letter-spacing:{slogan_spacing}em!important;font-family:{slogan_font}!important;{slogan_display}}}"
+            f".split-hero-image{{justify-content:{position}!important;}}"
+            f".split-hero-img{{transition:opacity {anim_duration:.2f}s ease, transform {anim_duration:.2f}s ease!important;}}"
+            f".split-hero-text{{transition:opacity {max(anim_duration*0.8,0.2):.2f}s ease, transform {max(anim_duration*0.8,0.2):.2f}s ease!important;}}"
+            f"{anim_off_rule}{overlay_rule}</style>"
+        )
+        img_tag = (
+            f'<img src="{image_src}" alt="Hero" class="split-hero-img" '
+            f'style="max-width: {size}%; max-height: {max_h}vh; opacity: {opacity:.2f}; transform: rotate({rotation}deg);" '
+            'onerror="this.src=\'images/home/main_page_image.png\'; this.onerror=null;">'
+        )
+
+        html_text = re.sub(r'<style id="homeEditorDynamicStyle">[\\s\\S]*?</style>', '', html_text)
+        if "</head>" in html_text:
+            html_text = html_text.replace("</head>", f"{dynamic_style}\n</head>", 1)
+        html_text = re.sub(
+            r'<body class="page-index page-index--split"[^>]*>',
+            f'<body class="page-index page-index--split" style="background:{bg_color};color:{text_color};">',
+            html_text,
+            count=1,
+        )
+        html_text = re.sub(r'<img[^>]*class="split-hero-img"[^>]*>', img_tag, html_text, count=1)
+        html_text = re.sub(
+            r'(<h1 class="split-hero-title"[^>]*>\s*)<a[^>]*class="split-hero-title-link"[^>]*>.*?</a>(\s*</h1>)',
+            rf'\1<a href="{link}" class="split-hero-title-link">{title}</a>\2',
+            html_text,
+            flags=re.DOTALL,
+            count=1,
+        )
+        html_text = re.sub(
+            r'<p class="split-hero-slogan"[^>]*>.*?</p>',
+            f'<p class="split-hero-slogan">{slogan}</p>',
+            html_text,
+            flags=re.DOTALL,
+            count=1,
+        )
+        with open(INDEX_HTML, "w", encoding="utf-8") as f:
+            f.write(html_text)
+
+    HomeManagerDialog.load_home_data = load_home_data
+    HomeManagerDialog._add_labeled_scale = _add_labeled_scale
+    HomeManagerDialog._add_labeled_combo = _add_labeled_combo
+    HomeManagerDialog.create_ui = create_ui
+    HomeManagerDialog.create_text_tab = create_text_tab
+    HomeManagerDialog.create_image_tab = create_image_tab
+    HomeManagerDialog.load_current_values = load_current_values
+    HomeManagerDialog.load_image = load_image
+    HomeManagerDialog.remove_image = remove_image
+    HomeManagerDialog.load_preview_image = load_preview_image
+    HomeManagerDialog._normalize_hex = _normalize_hex
+    HomeManagerDialog.update_preview = update_preview
+    HomeManagerDialog.reset_defaults = reset_defaults
+    HomeManagerDialog.save = save
+    HomeManagerDialog.update_index_html = update_index_html
+
+
+_install_home_editor_overrides()
+
+
+def _install_home_editor_korean_labels():
+    """Replace mojibake labels in HomeManagerDialog with clear Korean text."""
+
+    def create_text_tab(self, parent):
+        wrap = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        self.hero_title_var = tk.StringVar()
+        self.hero_link_var = tk.StringVar()
+        self.hero_slogan_var = tk.StringVar()
+        self.header_bg_var = tk.StringVar()
+        self.text_color_var = tk.StringVar()
+        self.show_title_var = tk.BooleanVar(value=True)
+        self.show_slogan_var = tk.BooleanVar(value=True)
+        self.text_align_var = tk.StringVar(value="center")
+        self.animation_enabled_var = tk.BooleanVar(value=True)
+        self.title_font_var = tk.StringVar(value="Inter")
+        self.slogan_font_var = tk.StringVar(value="Cormorant")
+
+        for label, var in [
+            ("메인 타이틀", self.hero_title_var),
+            ("타이틀 링크", self.hero_link_var),
+            ("슬로건", self.hero_slogan_var),
+            ("배경색(HEX)", self.header_bg_var),
+            ("텍스트색(HEX)", self.text_color_var),
+        ]:
+            row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+            row.pack(fill=tk.X, pady=4)
+            tk.Label(row, text=label, width=14, anchor="w", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT)
+            ent = tk.Entry(row, textvariable=var, font=ModernStyle.get_font(10), relief="solid", borderwidth=1)
+            ent.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+            ent.bind("<KeyRelease>", lambda _e: self.update_preview())
+
+        self._add_labeled_combo(wrap, "타이틀 폰트", self.title_font_var, list(self.font_options.keys()))
+        self._add_labeled_combo(wrap, "슬로건 폰트", self.slogan_font_var, list(self.font_options.keys()))
+
+        options_row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        options_row.pack(fill=tk.X, pady=(8, 2))
+        tk.Checkbutton(options_row, text="타이틀 표시", variable=self.show_title_var, bg=ModernStyle.BG_WHITE,
+                       command=self.update_preview).pack(side=tk.LEFT, padx=(0, 12))
+        tk.Checkbutton(options_row, text="슬로건 표시", variable=self.show_slogan_var, bg=ModernStyle.BG_WHITE,
+                       command=self.update_preview).pack(side=tk.LEFT, padx=(0, 12))
+        tk.Checkbutton(options_row, text="애니메이션 사용", variable=self.animation_enabled_var, bg=ModernStyle.BG_WHITE,
+                       command=self.update_preview).pack(side=tk.LEFT)
+
+        align_row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        align_row.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(align_row, text="텍스트 정렬", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT, padx=(0, 12))
+        for t, v in [("왼쪽", "left"), ("가운데", "center"), ("오른쪽", "right")]:
+            tk.Radiobutton(align_row, text=t, value=v, variable=self.text_align_var,
+                           bg=ModernStyle.BG_WHITE, command=self.update_preview).pack(side=tk.LEFT, padx=(0, 8))
+
+        self.title_size_var = tk.DoubleVar(value=15)
+        self.slogan_size_var = tk.DoubleVar(value=10)
+        self.slogan_spacing_var = tk.DoubleVar(value=0)
+        self.hero_text_gap_var = tk.IntVar(value=12)
+        self.animation_duration_var = tk.DoubleVar(value=10)
+        self.overlay_strength_var = tk.IntVar(value=0)
+
+        self._add_labeled_scale(wrap, "타이틀 크기 (x0.1rem)", self.title_size_var, 10, 40, self.update_preview)
+        self._add_labeled_scale(wrap, "슬로건 크기 (x0.1rem)", self.slogan_size_var, 7, 30, self.update_preview)
+        self._add_labeled_scale(wrap, "슬로건 자간 (x0.01em)", self.slogan_spacing_var, -20, 30, self.update_preview)
+        self._add_labeled_scale(wrap, "타이틀-슬로건 간격(px)", self.hero_text_gap_var, 0, 60, self.update_preview)
+        self._add_labeled_scale(wrap, "애니메이션 속도 (x0.1s)", self.animation_duration_var, 2, 30, self.update_preview)
+        self._add_labeled_scale(wrap, "오버레이 강도(%)", self.overlay_strength_var, 0, 70, self.update_preview)
+
+    def create_image_tab(self, parent):
+        wrap = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        btn_row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        btn_row.pack(fill=tk.X, pady=(0, 8))
+        tk.Button(btn_row, text="이미지 불러오기", font=ModernStyle.get_font(10), bg=ModernStyle.BG_LIGHT,
+                  relief="solid", borderwidth=1, padx=12, pady=6, command=self.load_image).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(btn_row, text="이미지 제거", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE,
+                  relief="solid", borderwidth=1, padx=12, pady=6, command=self.remove_image).pack(side=tk.LEFT)
+
+        self.image_path_label = tk.Label(wrap, text="선택된 이미지 없음", font=ModernStyle.get_font(9),
+                                         bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE)
+        self.image_path_label.pack(anchor="w", pady=(0, 8))
+        self.size_var = tk.IntVar(value=85)
+        self.height_var = tk.IntVar(value=50)
+        self.opacity_var = tk.IntVar(value=100)
+        self.position_var = tk.StringVar(value="center")
+        self.text_margin_var = tk.IntVar(value=50)
+        self.rotation_var = tk.IntVar(value=0)
+        self._add_labeled_scale(wrap, "이미지 너비(%)", self.size_var, 20, 120, self.update_preview)
+        self._add_labeled_scale(wrap, "이미지 최대 높이(vh)", self.height_var, 20, 90, self.update_preview)
+        self._add_labeled_scale(wrap, "이미지 투명도(%)", self.opacity_var, 10, 100, self.update_preview)
+        self._add_labeled_scale(wrap, "이미지 회전(도)", self.rotation_var, -15, 15, self.update_preview)
+        self._add_labeled_scale(wrap, "이미지 아래 텍스트 여백(px)", self.text_margin_var, 0, 140, self.update_preview)
+
+        pos_row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        pos_row.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(pos_row, text="이미지 위치", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT, padx=(0, 12))
+        for txt, val in [("왼쪽", "left"), ("가운데", "center"), ("오른쪽", "right")]:
+            tk.Radiobutton(pos_row, text=txt, value=val, variable=self.position_var,
+                           bg=ModernStyle.BG_WHITE, command=self.update_preview).pack(side=tk.LEFT, padx=(0, 8))
+
+    def create_ui(self):
+        self.font_options = {
+            "Inter": "Inter, sans-serif",
+            "Cormorant": "Cormorant Garamond, Georgia, serif",
+            "Arial": "Arial, sans-serif",
+            "Georgia": "Georgia, serif",
+            "Times": "Times New Roman, serif",
+            "Verdana": "Verdana, sans-serif",
+        }
+        main = tk.Frame(self, bg=ModernStyle.BG_WHITE)
+        main.pack(fill=tk.BOTH, expand=True, padx=26, pady=18)
+        tk.Label(main, text="홈화면 편집", font=ModernStyle.get_font(16, "bold"), bg=ModernStyle.BG_WHITE).pack(anchor="w")
+        tk.Label(main, text="폰트/애니메이션/정렬/색상/히어로 이미지를 편집하고 실시간 미리보기를 확인합니다.",
+                 font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_MUTED).pack(anchor="w", pady=(2, 14))
+
+        body = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        body.pack(fill=tk.BOTH, expand=True)
+        controls = tk.Frame(body, bg=ModernStyle.BG_WHITE)
+        controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 14))
+        preview_panel = tk.Frame(body, bg=ModernStyle.BG_LIGHT, relief="solid", borderwidth=1)
+        preview_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        notebook = ttk.Notebook(controls)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        design_tab = tk.Frame(notebook, bg=ModernStyle.BG_WHITE)
+        notebook.add(design_tab, text="디자인")
+        self.create_text_tab(design_tab)
+        image_tab = tk.Frame(notebook, bg=ModernStyle.BG_WHITE)
+        notebook.add(image_tab, text="이미지")
+        self.create_image_tab(image_tab)
+
+        tk.Label(preview_panel, text="실시간 미리보기", font=ModernStyle.get_font(10, "bold"),
+                 bg=ModernStyle.BG_LIGHT, fg=ModernStyle.TEXT_MUTED).pack(pady=10)
+        self.preview_canvas = tk.Canvas(preview_panel, bg="#111111", width=500, height=380,
+                                        highlightthickness=1, highlightbackground=ModernStyle.BORDER)
+        self.preview_canvas.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+
+        btn_row = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        btn_row.pack(fill=tk.X, pady=(14, 0))
+        tk.Button(btn_row, text="기본값 초기화", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE,
+                  relief="solid", borderwidth=1, padx=14, pady=8, command=self.reset_defaults).pack(side=tk.LEFT)
+        tk.Button(btn_row, text="미리보기 열기", font=ModernStyle.get_font(10), bg=ModernStyle.BG_LIGHT,
+                  relief="solid", borderwidth=1, padx=16, pady=8, command=self.preview).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_row, text="취소", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE,
+                  relief="solid", borderwidth=1, padx=16, pady=8, command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_row, text="저장", font=ModernStyle.get_font(10, "bold"), bg=ModernStyle.ACCENT,
+                  fg=ModernStyle.BG_WHITE, relief="flat", padx=20, pady=8, command=self.save).pack(side=tk.RIGHT)
+
+    def load_image(self):
+        filetypes = [("이미지 파일", "*.jpg *.jpeg *.png *.webp *.gif"), ("모든 파일", "*.*")]
+        path = filedialog.askopenfilename(title="히어로 이미지 선택", filetypes=filetypes)
+        if not path:
+            return
+        src = Path(path)
+        dest = HOME_IMAGES_DIR / f"hero{src.suffix}"
+        try:
+            shutil.copy2(src, dest)
+            self.image_path = str(dest)
+            self.image_path_label.config(text=f"현재: images/home/hero{src.suffix}")
+            self.load_preview_image()
+            self.update_preview()
+        except Exception as e:
+            messagebox.showerror("오류", f"이미지 복사 실패: {str(e)}")
+
+    def remove_image(self):
+        self.image_path = None
+        self.image_preview = None
+        self.preview_scaled_image = None
+        self.image_path_label.config(text="선택된 이미지 없음")
+        self.update_preview()
+
+    def load_current_values(self):
+        self.hero_title_var.set(self.home_data.get("hero_title", "J-HR"))
+        self.hero_link_var.set(self.home_data.get("hero_link", "projects.html"))
+        self.hero_slogan_var.set(self.home_data.get("hero_slogan", "DESIGN ANYTHING"))
+        self.header_bg_var.set(self.home_data.get("header_bg_color", "#000000"))
+        self.text_color_var.set(self.home_data.get("text_color", "#ffffff"))
+        self.show_title_var.set(self.home_data.get("show_title", True))
+        self.show_slogan_var.set(self.home_data.get("show_slogan", True))
+        self.text_align_var.set(self.home_data.get("text_align", "center"))
+        self.animation_enabled_var.set(self.home_data.get("animation_enabled", True))
+        self.overlay_strength_var.set(int(self.home_data.get("overlay_strength", 0.0) * 100))
+        self.title_size_var.set(float(self.home_data.get("title_size_rem", 1.5)) * 10)
+        self.slogan_size_var.set(float(self.home_data.get("slogan_size_rem", 1.0)) * 10)
+        self.slogan_spacing_var.set(float(self.home_data.get("slogan_letter_spacing_em", 0.0)) * 100)
+        self.hero_text_gap_var.set(int(self.home_data.get("hero_text_gap", 12)))
+        self.animation_duration_var.set(float(self.home_data.get("animation_duration_s", 1.0)) * 10)
+        self.size_var.set(int(self.home_data.get("hero_image_size", 85)))
+        self.height_var.set(int(self.home_data.get("hero_image_max_height_vh", 50)))
+        self.opacity_var.set(int(self.home_data.get("hero_image_opacity", 100)))
+        self.position_var.set(str(self.home_data.get("hero_image_position", "center")))
+        self.rotation_var.set(int(self.home_data.get("hero_image_rotation_deg", 0)))
+        self.text_margin_var.set(int(self.home_data.get("hero_text_margin_top", 50)))
+
+        title_font = self.home_data.get("title_font_family", "Inter, sans-serif")
+        slogan_font = self.home_data.get("slogan_font_family", "Cormorant Garamond, Georgia, serif")
+        self.title_font_var.set(next((k for k, v in self.font_options.items() if v == title_font), "Inter"))
+        self.slogan_font_var.set(next((k for k, v in self.font_options.items() if v == slogan_font), "Cormorant"))
+
+        hero_image = self.home_data.get("hero_image", "")
+        if hero_image and Path(SCRIPT_DIR / hero_image).exists():
+            self.image_path = str(SCRIPT_DIR / hero_image)
+            self.image_path_label.config(text=f"현재: {hero_image}")
+            self.load_preview_image()
+        else:
+            self.image_preview = None
+
+        self.update_preview()
+
+    HomeManagerDialog.create_ui = create_ui
+    HomeManagerDialog.create_text_tab = create_text_tab
+    HomeManagerDialog.create_image_tab = create_image_tab
+    HomeManagerDialog.load_current_values = load_current_values
+    HomeManagerDialog.load_image = load_image
+    HomeManagerDialog.remove_image = remove_image
+
+
+_install_home_editor_korean_labels()
+
+def _install_home_editor_final_v2():
+    """Final HomeManagerDialog override."""
+
+    def _defaults():
+        return {
+            "shared": {
+                "hero_title": "J-HR",
+                "hero_link": "projects.html",
+                "hero_slogan": "DESIGN ANYTHING",
+                "hero_image": "",
+                "header_bg_color": "#000000",
+                "text_color": "#ffffff",
+                "hero_image_opacity": 100,
+                "show_title": True,
+                "show_slogan": True,
+            },
+            "desktop": {
+                "hero_image_size": 85,
+                "hero_image_max_height_vh": 50,
+                "hero_image_position": "center",
+                "hero_text_margin_top": 50,
+                "hero_text_gap": 12,
+                "title_size_rem": 1.5,
+                "slogan_size_rem": 1.0,
+                "text_align": "center",
+                "header_min_height_vh": 100,
+            },
+            "mobile": {
+                "hero_image_size": 90,
+                "hero_image_max_height_vh": 46,
+                "hero_image_position": "center",
+                "hero_text_margin_top": 38,
+                "hero_text_gap": 10,
+                "title_size_rem": 1.1,
+                "slogan_size_rem": 0.9,
+                "text_align": "center",
+                "header_min_height_vh": 70,
+            },
+        }
+
+    def _hex(value, fallback):
+        text = str(value or "").strip()
+        if text.startswith("#") and len(text) in {4, 7} and all(c in "0123456789abcdefABCDEF" for c in text[1:]):
+            return text.lower()
+        return fallback
+
+    def _clamp_i(value, lo, hi, default):
+        try:
+            num = int(float(value))
+        except Exception:
+            num = default
+        return max(lo, min(hi, num))
+
+    def _clamp_f(value, lo, hi, default):
+        try:
+            num = float(value)
+        except Exception:
+            num = default
+        return max(lo, min(hi, num))
+
+    def _merge_payload(raw):
+        defaults = _defaults()
+        shared = defaults["shared"].copy()
+        desktop = defaults["desktop"].copy()
+        mobile = defaults["mobile"].copy()
+
+        if isinstance(raw, dict):
+            for key in shared:
+                if key in raw:
+                    shared[key] = raw[key]
+
+            if isinstance(raw.get("desktop"), dict):
+                desktop.update(raw["desktop"])
+            if isinstance(raw.get("mobile"), dict):
+                mobile.update(raw["mobile"])
+
+            for key in desktop:
+                if key in raw:
+                    desktop[key] = raw[key]
+                m_key = f"mobile_{key}"
+                if m_key in raw:
+                    mobile[key] = raw[m_key]
+
+        shared["hero_title"] = str(shared.get("hero_title") or "J-HR")
+        shared["hero_link"] = str(shared.get("hero_link") or "projects.html")
+        shared["hero_slogan"] = str(shared.get("hero_slogan") or "DESIGN ANYTHING")
+        shared["hero_image"] = str(shared.get("hero_image") or "")
+        shared["header_bg_color"] = _hex(shared.get("header_bg_color"), "#000000")
+        shared["text_color"] = _hex(shared.get("text_color"), "#ffffff")
+        shared["hero_image_opacity"] = _clamp_i(shared.get("hero_image_opacity"), 10, 100, 100)
+        shared["show_title"] = bool(shared.get("show_title", True))
+        shared["show_slogan"] = bool(shared.get("show_slogan", True))
+
+        def _sanitize_mode(values, fallback):
+            result = fallback.copy()
+            result.update(values)
+            result["hero_image_size"] = _clamp_i(result["hero_image_size"], 20, 130, fallback["hero_image_size"])
+            result["hero_image_max_height_vh"] = _clamp_i(
+                result["hero_image_max_height_vh"], 20, 95, fallback["hero_image_max_height_vh"]
+            )
+            result["hero_image_position"] = str(result["hero_image_position"]).strip().lower()
+            if result["hero_image_position"] not in {"left", "center", "right"}:
+                result["hero_image_position"] = fallback["hero_image_position"]
+            result["hero_text_margin_top"] = _clamp_i(
+                result["hero_text_margin_top"], 0, 180, fallback["hero_text_margin_top"]
+            )
+            result["hero_text_gap"] = _clamp_i(result["hero_text_gap"], 0, 80, fallback["hero_text_gap"])
+            result["title_size_rem"] = _clamp_f(result["title_size_rem"], 0.7, 4.0, fallback["title_size_rem"])
+            result["slogan_size_rem"] = _clamp_f(result["slogan_size_rem"], 0.6, 3.0, fallback["slogan_size_rem"])
+            result["text_align"] = str(result["text_align"]).strip().lower()
+            if result["text_align"] not in {"left", "center", "right"}:
+                result["text_align"] = fallback["text_align"]
+            result["header_min_height_vh"] = _clamp_i(
+                result["header_min_height_vh"], 45, 120, fallback["header_min_height_vh"]
+            )
+            return result
+
+        desktop = _sanitize_mode(desktop, defaults["desktop"])
+        mobile = _sanitize_mode(mobile, defaults["mobile"])
+
+        return {"schema": "split_home_v2", **shared, "desktop": desktop, "mobile": mobile}
+
+    def load_home_data(self):
+        raw = {}
+        if HOME_DATA_JSON.exists():
+            try:
+                with open(HOME_DATA_JSON, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    raw = data
+            except Exception:
+                raw = {}
+        return _merge_payload(raw)
+
+    def _mode_label(mode):
+        return "PC" if mode == "desktop" else "\ubaa8\ubc14\uc77c"
+
+    def _store_current_mode(self, mode_name=None):
+        mode = mode_name or self.edit_mode_var.get()
+        if mode not in {"desktop", "mobile"}:
+            mode = "desktop"
+        self.mode_data[mode] = {
+            "hero_image_size": int(self.size_var.get()),
+            "hero_image_max_height_vh": int(self.height_var.get()),
+            "hero_image_position": self.position_var.get(),
+            "hero_text_margin_top": int(self.text_margin_var.get()),
+            "hero_text_gap": int(self.text_gap_var.get()),
+            "title_size_rem": float(self.title_size_var.get()) / 10.0,
+            "slogan_size_rem": float(self.slogan_size_var.get()) / 10.0,
+            "text_align": self.text_align_var.get(),
+            "header_min_height_vh": int(self.min_height_var.get()),
+        }
+        self.mode_data[mode] = _merge_payload({"desktop": self.mode_data["desktop"], "mobile": self.mode_data["mobile"]})[
+            mode
+        ]
+
+    def _load_mode_values(self, mode):
+        mode = mode if mode in {"desktop", "mobile"} else "desktop"
+        values = self.mode_data[mode]
+        self.size_var.set(values["hero_image_size"])
+        self.height_var.set(values["hero_image_max_height_vh"])
+        self.position_var.set(values["hero_image_position"])
+        self.text_margin_var.set(values["hero_text_margin_top"])
+        self.text_gap_var.set(values["hero_text_gap"])
+        self.title_size_var.set(values["title_size_rem"] * 10.0)
+        self.slogan_size_var.set(values["slogan_size_rem"] * 10.0)
+        self.text_align_var.set(values["text_align"])
+        self.min_height_var.set(values["header_min_height_vh"])
+
+    def _switch_mode(self):
+        target = self.edit_mode_var.get()
+        if target not in {"desktop", "mobile"}:
+            target = "desktop"
+            self.edit_mode_var.set(target)
+        current = getattr(self, "_active_mode", target)
+        if current != target:
+            self._store_current_mode(current)
+            self._load_mode_values(target)
+            self._active_mode = target
+        self.mode_hint_var.set(f"\ud604\uc7ac \ud3b8\uc9d1 \ub300\uc0c1: {_mode_label(target)}")
+        self.update_preview()
+
+    def _add_scale(self, parent, text, var, frm, to):
+        tk.Label(parent, text=text, font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(anchor="w", pady=(8, 0))
+        scale = tk.Scale(
+            parent,
+            from_=frm,
+            to=to,
+            orient=tk.HORIZONTAL,
+            variable=var,
+            length=290,
+            bg=ModernStyle.BG_WHITE,
+            highlightthickness=0,
+            command=lambda _v: self.update_preview(),
+        )
+        scale.pack(fill=tk.X, pady=(2, 6))
+        return scale
+
+    def _bind_entry(self, entry):
+        entry.bind("<KeyRelease>", lambda _e: self.update_preview())
+        entry.bind("<FocusOut>", lambda _e: self.update_preview())
+
+    def create_text_tab(self, parent):
+        wrap = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        for label, var in [
+            ("\uba54\uc778 \uc81c\ubaa9", self.hero_title_var),
+            ("\uc81c\ubaa9 \ub9c1\ud06c", self.hero_link_var),
+            ("\uc11c\ube0c \ubb38\uad6c", self.hero_slogan_var),
+            ("\ubc30\uacbd\uc0c9 (HEX)", self.bg_color_var),
+            ("\ud14d\uc2a4\ud2b8\uc0c9 (HEX)", self.text_color_var),
+        ]:
+            row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+            row.pack(fill=tk.X, pady=4)
+            tk.Label(row, text=label, width=14, anchor="w", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(
+                side=tk.LEFT
+            )
+            ent = tk.Entry(row, textvariable=var, font=ModernStyle.get_font(10), relief="solid", borderwidth=1)
+            ent.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+            self._bind_entry(ent)
+
+        checks = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        checks.pack(fill=tk.X, pady=(8, 2))
+        tk.Checkbutton(checks, text="\uc81c\ubaa9 \ud45c\uc2dc", variable=self.show_title_var, bg=ModernStyle.BG_WHITE, command=self.update_preview).pack(side=tk.LEFT, padx=(0, 12))
+        tk.Checkbutton(checks, text="\uc11c\ube0c \ud45c\uc2dc", variable=self.show_slogan_var, bg=ModernStyle.BG_WHITE, command=self.update_preview).pack(side=tk.LEFT)
+
+        align = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        align.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(align, text="\ud14d\uc2a4\ud2b8 \uc815\ub82c", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT, padx=(0, 12))
+        for text, value in [("\uc67c\ucabd", "left"), ("\uac00\uc6b4\ub370", "center"), ("\uc624\ub978\ucabd", "right")]:
+            tk.Radiobutton(
+                align, text=text, value=value, variable=self.text_align_var, bg=ModernStyle.BG_WHITE, command=self.update_preview
+            ).pack(side=tk.LEFT, padx=(0, 8))
+
+        self._add_scale(wrap, "\uc81c\ubaa9 \ud06c\uae30 (x0.1rem)", self.title_size_var, 8, 40)
+        self._add_scale(wrap, "\uc11c\ube0c \ud06c\uae30 (x0.1rem)", self.slogan_size_var, 6, 30)
+        self._add_scale(wrap, "\uc81c\ubaa9-\uc11c\ube0c \uac04\uaca9(px)", self.text_gap_var, 0, 80)
+
+    def create_image_tab(self, parent):
+        wrap = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        btns = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        btns.pack(fill=tk.X, pady=(0, 8))
+        tk.Button(btns, text="\uc774\ubbf8\uc9c0 \ubd88\ub7ec\uc624\uae30", font=ModernStyle.get_font(10), bg=ModernStyle.BG_LIGHT, relief="solid", borderwidth=1, padx=12, pady=6, command=self.load_image).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(btns, text="\uc774\ubbf8\uc9c0 \uc81c\uac70", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE, relief="solid", borderwidth=1, padx=12, pady=6, command=self.remove_image).pack(side=tk.LEFT)
+
+        self.image_path_label = tk.Label(wrap, text="\uc120\ud0dd\ub41c \uc774\ubbf8\uc9c0 \uc5c6\uc74c", font=ModernStyle.get_font(9), bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE)
+        self.image_path_label.pack(anchor="w", pady=(0, 8))
+
+        self._add_scale(wrap, "\uc774\ubbf8\uc9c0 \ub108\ube44(%)", self.size_var, 20, 130)
+        self._add_scale(wrap, "\uc774\ubbf8\uc9c0 \ucd5c\ub300 \ub192\uc774(vh)", self.height_var, 20, 95)
+        self._add_scale(wrap, "\uc774\ubbf8\uc9c0 \ud22c\uba85\ub3c4(%)", self.opacity_var, 10, 100)
+        self._add_scale(wrap, "\uc774\ubbf8\uc9c0 \uc544\ub798 \ud14d\uc2a4\ud2b8 \uc5ec\ubc31(px)", self.text_margin_var, 0, 180)
+        self._add_scale(wrap, "\ud5e4\ub354 \ucd5c\uc18c \ub192\uc774(vh)", self.min_height_var, 45, 120)
+
+        pos = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        pos.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(pos, text="\uc774\ubbf8\uc9c0 \uc815\ub82c", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT, padx=(0, 12))
+        for text, value in [("\uc67c\ucabd", "left"), ("\uac00\uc6b4\ub370", "center"), ("\uc624\ub978\ucabd", "right")]:
+            tk.Radiobutton(
+                pos, text=text, value=value, variable=self.position_var, bg=ModernStyle.BG_WHITE, command=self.update_preview
+            ).pack(side=tk.LEFT, padx=(0, 8))
+
+    def create_ui(self):
+        self.edit_mode_var = tk.StringVar(value="desktop")
+        self.mode_hint_var = tk.StringVar(value="\ud604\uc7ac \ud3b8\uc9d1 \ub300\uc0c1: PC")
+        self.mode_data = {"desktop": _defaults()["desktop"].copy(), "mobile": _defaults()["mobile"].copy()}
+        self._active_mode = "desktop"
+
+        self.hero_title_var = tk.StringVar()
+        self.hero_link_var = tk.StringVar()
+        self.hero_slogan_var = tk.StringVar()
+        self.bg_color_var = tk.StringVar()
+        self.text_color_var = tk.StringVar()
+        self.show_title_var = tk.BooleanVar(value=True)
+        self.show_slogan_var = tk.BooleanVar(value=True)
+        self.title_size_var = tk.DoubleVar(value=15)
+        self.slogan_size_var = tk.DoubleVar(value=10)
+        self.text_gap_var = tk.IntVar(value=12)
+        self.size_var = tk.IntVar(value=85)
+        self.height_var = tk.IntVar(value=50)
+        self.opacity_var = tk.IntVar(value=100)
+        self.position_var = tk.StringVar(value="center")
+        self.text_margin_var = tk.IntVar(value=50)
+        self.text_align_var = tk.StringVar(value="center")
+        self.min_height_var = tk.IntVar(value=100)
+
+        main = tk.Frame(self, bg=ModernStyle.BG_WHITE)
+        main.pack(fill=tk.BOTH, expand=True, padx=24, pady=16)
+        tk.Label(main, text="\ud648\ud654\uba74 \ud3b8\uc9d1", font=ModernStyle.get_font(16, "bold"), bg=ModernStyle.BG_WHITE).pack(anchor="w")
+        tk.Label(main, text="\uc2e4\uc81c \ud648\ud654\uba74 \ub514\uc790\uc778\uc744 \uae30\uc900\uc73c\ub85c PC/\ubaa8\ubc14\uc77c\uc744 \uac01\uac01 \uc218\uc815\ud569\ub2c8\ub2e4.", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_MUTED).pack(anchor="w", pady=(2, 10))
+
+        mode_row = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        mode_row.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(mode_row, text="\ud3b8\uc9d1 \ub300\uc0c1", font=ModernStyle.get_font(10, "bold"), bg=ModernStyle.BG_WHITE).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Radiobutton(mode_row, text="PC", value="desktop", variable=self.edit_mode_var, bg=ModernStyle.BG_WHITE, command=self._switch_mode).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Radiobutton(mode_row, text="\ubaa8\ubc14\uc77c", value="mobile", variable=self.edit_mode_var, bg=ModernStyle.BG_WHITE, command=self._switch_mode).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(mode_row, textvariable=self.mode_hint_var, font=ModernStyle.get_font(9), bg=ModernStyle.BG_WHITE, fg=ModernStyle.TEXT_SUBTLE).pack(side=tk.LEFT)
+
+        body = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        body.pack(fill=tk.BOTH, expand=True)
+        controls = tk.Frame(body, bg=ModernStyle.BG_WHITE)
+        controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12))
+        preview_panel = tk.Frame(body, bg=ModernStyle.BG_LIGHT, relief="solid", borderwidth=1)
+        preview_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        notebook = ttk.Notebook(controls)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        tab_a = tk.Frame(notebook, bg=ModernStyle.BG_WHITE)
+        notebook.add(tab_a, text="\ud14d\uc2a4\ud2b8")
+        self.create_text_tab(tab_a)
+        tab_b = tk.Frame(notebook, bg=ModernStyle.BG_WHITE)
+        notebook.add(tab_b, text="\uc774\ubbf8\uc9c0")
+        self.create_image_tab(tab_b)
+
+        tk.Label(preview_panel, text="\uc2e4\uc2dc\uac04 \ubbf8\ub9ac\ubcf4\uae30", font=ModernStyle.get_font(10, "bold"), bg=ModernStyle.BG_LIGHT, fg=ModernStyle.TEXT_MUTED).pack(pady=10)
+        self.preview_canvas = tk.Canvas(preview_panel, bg="#111111", width=540, height=410, highlightthickness=1, highlightbackground=ModernStyle.BORDER)
+        self.preview_canvas.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        self.preview_canvas.bind("<Configure>", lambda _e: self.update_preview())
+
+        btns = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        btns.pack(fill=tk.X, pady=(12, 0))
+        tk.Button(btns, text="\uae30\ubcf8\uac12 \ubcf5\uc6d0", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE, relief="solid", borderwidth=1, padx=14, pady=8, command=self.reset_defaults).pack(side=tk.LEFT)
+        tk.Button(btns, text="\ube0c\ub77c\uc6b0\uc800 \ubbf8\ub9ac\ubcf4\uae30", font=ModernStyle.get_font(10), bg=ModernStyle.BG_LIGHT, relief="solid", borderwidth=1, padx=16, pady=8, command=self.preview).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btns, text="\ucde8\uc18c", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE, relief="solid", borderwidth=1, padx=16, pady=8, command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btns, text="\uc800\uc7a5", font=ModernStyle.get_font(10, "bold"), bg=ModernStyle.ACCENT, fg=ModernStyle.BG_WHITE, relief="flat", padx=20, pady=8, command=self.save).pack(side=tk.RIGHT)
+        self.bind("<Control-s>", lambda _e: self.save())
+
+    def load_current_values(self):
+        self.home_data = _merge_payload(self.home_data)
+        self.hero_title_var.set(self.home_data.get("hero_title", "J-HR"))
+        self.hero_link_var.set(self.home_data.get("hero_link", "projects.html"))
+        self.hero_slogan_var.set(self.home_data.get("hero_slogan", "DESIGN ANYTHING"))
+        self.bg_color_var.set(self.home_data.get("header_bg_color", "#000000"))
+        self.text_color_var.set(self.home_data.get("text_color", "#ffffff"))
+        self.show_title_var.set(bool(self.home_data.get("show_title", True)))
+        self.show_slogan_var.set(bool(self.home_data.get("show_slogan", True)))
+        self.opacity_var.set(int(self.home_data.get("hero_image_opacity", 100)))
+
+        self.mode_data = {
+            "desktop": self.home_data["desktop"].copy(),
+            "mobile": self.home_data["mobile"].copy(),
+        }
+        self._active_mode = "desktop"
+        self.edit_mode_var.set("desktop")
+        self._load_mode_values("desktop")
+        self.mode_hint_var.set(f"\ud604\uc7ac \ud3b8\uc9d1 \ub300\uc0c1: {_mode_label('desktop')}")
+
+        hero_image = self.home_data.get("hero_image", "")
+        if hero_image and (SCRIPT_DIR / hero_image).exists():
+            self.image_path = str(SCRIPT_DIR / hero_image)
+            self.image_path_label.config(text=f"\ud604\uc7ac \uc774\ubbf8\uc9c0: {hero_image}")
+            self.load_preview_image()
+        else:
+            self.image_path = None
+            self.image_preview = None
+            self.preview_scaled_image = None
+            self.image_path_label.config(text="\uc120\ud0dd\ub41c \uc774\ubbf8\uc9c0 \uc5c6\uc74c")
+        self.update_preview()
+
+    def load_image(self):
+        filetypes = [("\uc774\ubbf8\uc9c0 \ud30c\uc77c", "*.jpg *.jpeg *.png *.webp *.gif"), ("\ubaa8\ub4e0 \ud30c\uc77c", "*.*")]
+        path = filedialog.askopenfilename(title="\ud648\ud654\uba74 \uc774\ubbf8\uc9c0 \uc120\ud0dd", filetypes=filetypes)
+        if not path:
+            return
+        src = Path(path)
+        dest = HOME_IMAGES_DIR / f"hero{src.suffix.lower()}"
+        try:
+            shutil.copy2(src, dest)
+            self.image_path = str(dest)
+            rel = str(dest.relative_to(SCRIPT_DIR)).replace("\\", "/")
+            self.image_path_label.config(text=f"\ud604\uc7ac \uc774\ubbf8\uc9c0: {rel}")
+            self.load_preview_image()
+            self.update_preview()
+        except Exception as e:
+            messagebox.showerror("\uc624\ub958", f"\uc774\ubbf8\uc9c0 \ubcf5\uc0ac \uc2e4\ud328: {e}")
+
+    def remove_image(self):
+        self.image_path = None
+        self.image_preview = None
+        self.preview_scaled_image = None
+        self.image_path_label.config(text="\uc120\ud0dd\ub41c \uc774\ubbf8\uc9c0 \uc5c6\uc74c")
+        self.update_preview()
+
+    def load_preview_image(self):
+        if not self.image_path or not Path(self.image_path).exists():
+            self.image_preview = None
+            return
+        try:
+            self.image_preview = Image.open(self.image_path).convert("RGBA")
+        except Exception:
+            self.image_preview = None
+
+    def _current_payload(self):
+        self._store_current_mode()
+        payload = {
+            "hero_title": self.hero_title_var.get().strip() or "J-HR",
+            "hero_link": self.hero_link_var.get().strip() or "projects.html",
+            "hero_slogan": self.hero_slogan_var.get().strip() or "DESIGN ANYTHING",
+            "hero_image": "",
+            "header_bg_color": _hex(self.bg_color_var.get(), "#000000"),
+            "text_color": _hex(self.text_color_var.get(), "#ffffff"),
+            "hero_image_opacity": _clamp_i(self.opacity_var.get(), 10, 100, 100),
+            "show_title": bool(self.show_title_var.get()),
+            "show_slogan": bool(self.show_slogan_var.get()),
+            "desktop": self.mode_data["desktop"].copy(),
+            "mobile": self.mode_data["mobile"].copy(),
+            "schema": "split_home_v2",
+        }
+        if self.image_path and Path(self.image_path).exists():
+            payload["hero_image"] = str(Path(self.image_path).relative_to(SCRIPT_DIR)).replace("\\", "/")
+        return _merge_payload(payload)
+
+    def update_preview(self, *_args):
+        if not hasattr(self, "preview_canvas"):
+            return
+        mode = self.edit_mode_var.get() if self.edit_mode_var.get() in {"desktop", "mobile"} else "desktop"
+        current = self._current_payload()
+        mode_data = current[mode]
+
+        canvas = self.preview_canvas
+        cw = max(int(canvas.winfo_width()), 540)
+        ch = max(int(canvas.winfo_height()), 410)
+        canvas.delete("all")
+        canvas.configure(bg="#111111")
+
+        if mode == "mobile":
+            vw = min(300, cw - 90)
+            vh = min(ch - 50, int(vw * 2.0))
+            vx = (cw - vw) // 2
+            vy = (ch - vh) // 2 + 8
+            canvas.create_rectangle(vx - 8, vy - 8, vx + vw + 8, vy + vh + 8, outline="#6f6f6f", width=2)
+            canvas.create_text(cw // 2, 14, text="\ubaa8\ubc14\uc77c \ubbf8\ub9ac\ubcf4\uae30", fill="#8f8f8f", font=("Segoe UI", 9))
+        else:
+            vx, vy = 14, 30
+            vw, vh = cw - 28, ch - 44
+            canvas.create_text(cw // 2, 14, text="PC \ubbf8\ub9ac\ubcf4\uae30", fill="#8f8f8f", font=("Segoe UI", 9))
+
+        bg = _hex(current["header_bg_color"], "#000000")
+        fg = _hex(current["text_color"], "#ffffff")
+        canvas.create_rectangle(vx, vy, vx + vw, vy + vh, fill=bg, outline="")
+
+        top_pad = 20 if mode == "mobile" else 30
+        max_w = max(40, int(vw * mode_data["hero_image_size"] / 100.0))
+        max_h = max(40, int(vh * mode_data["hero_image_max_height_vh"] / 100.0))
+        img_bottom = vy + int(vh * 0.30)
+        if self.image_preview is not None:
+            img = self.image_preview.copy()
+            img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+            alpha = max(0.1, min(1.0, current["hero_image_opacity"] / 100.0))
+            img.putalpha(img.split()[-1].point(lambda p: int(p * alpha)))
+            self.preview_scaled_image = ImageTk.PhotoImage(img)
+            iw, ih = img.size
+            if mode_data["hero_image_position"] == "left":
+                ix = vx + 18 + iw // 2
+            elif mode_data["hero_image_position"] == "right":
+                ix = vx + vw - 18 - iw // 2
+            else:
+                ix = vx + vw // 2
+            iy = vy + top_pad + ih // 2
+            img_bottom = iy + ih // 2
+            canvas.create_image(ix, iy, image=self.preview_scaled_image)
+        else:
+            pw = min(max_w, int(vw * 0.56))
+            ph = min(max_h, int(vh * 0.24))
+            px = vx + (vw - pw) // 2
+            py = vy + top_pad
+            img_bottom = py + ph
+            canvas.create_rectangle(px, py, px + pw, py + ph, outline="#757575", dash=(4, 4))
+            canvas.create_text(px + pw // 2, py + ph // 2, text="HERO IMAGE", fill="#999999", font=("Segoe UI", 9))
+
+        align = mode_data["text_align"]
+        if align == "left":
+            tx = vx + 28
+            anchor = "w"
+        elif align == "right":
+            tx = vx + vw - 28
+            anchor = "e"
+        else:
+            tx = vx + vw // 2
+            anchor = "center"
+
+        scale = max(0.45, min(1.2, vh / 800.0))
+        title_size = max(10, int(mode_data["title_size_rem"] * 16 * scale))
+        slogan_size = max(9, int(mode_data["slogan_size_rem"] * 14 * scale))
+        y = int(img_bottom + mode_data["hero_text_margin_top"] * scale + 18)
+
+        if current["show_title"]:
+            canvas.create_text(tx, y, text=current["hero_title"], anchor=anchor, fill=fg, font=("Segoe UI", title_size, "bold"))
+            y += int(mode_data["hero_text_gap"] * scale) + title_size
+        if current["show_slogan"]:
+            canvas.create_text(tx, y, text=current["hero_slogan"], anchor=anchor, fill=fg, font=("Georgia", slogan_size))
+
+    def reset_defaults(self):
+        self.home_data = _merge_payload({})
+        self.load_current_values()
+
+    def save(self, preview_only=False):
+        try:
+            payload = self._current_payload()
+            for key, value in payload["desktop"].items():
+                payload[key] = value
+            for key, value in payload["mobile"].items():
+                payload[f"mobile_{key}"] = value
+            with open(HOME_DATA_JSON, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            self.update_index_html(payload)
+            self.home_data = payload
+            if not preview_only:
+                messagebox.showinfo("\uc800\uc7a5 \uc644\ub8cc", "\ud648\ud654\uba74 \uc124\uc815\uc774 \uc800\uc7a5\ub418\uc5c8\uc2b5\ub2c8\ub2e4.")
+        except Exception as e:
+            messagebox.showerror("\uc624\ub958", f"\uc800\uc7a5 \uc2e4\ud328: {e}")
+
+    def preview(self):
+        self.save(preview_only=True)
+        webbrowser.open(INDEX_HTML.as_uri())
+
+    def update_index_html(self, data):
+        if not INDEX_HTML.exists():
+            return
+        payload = _merge_payload(data if isinstance(data, dict) else {})
+        desktop = payload["desktop"]
+        mobile = payload["mobile"]
+
+        align_map = {"left": "flex-start", "center": "center", "right": "flex-end"}
+        bg = _hex(payload["header_bg_color"], "#000000")
+        fg = _hex(payload["text_color"], "#ffffff")
+        opacity = _clamp_f(payload["hero_image_opacity"] / 100.0, 0.1, 1.0, 1.0)
+        title_display = "display:none!important;" if not payload["show_title"] else ""
+        slogan_display = "display:none!important;" if not payload["show_slogan"] else ""
+
+        style = (
+            '<style id="homeEditorDynamicStyle">'
+            f".split-header{{background:{bg}!important;min-height:{desktop['header_min_height_vh']}vh!important;}}"
+            f".split-hero-image{{justify-content:{desktop['hero_image_position']}!important;}}"
+            f".split-hero-img{{max-width:{desktop['hero_image_size']}%!important;max-height:{desktop['hero_image_max_height_vh']}vh!important;opacity:{opacity:.2f}!important;}}"
+            f".split-hero-text{{margin-top:{desktop['hero_text_margin_top']}px!important;gap:{desktop['hero_text_gap']}px!important;align-items:{align_map[desktop['text_align']]}!important;text-align:{desktop['text_align']}!important;}}"
+            f".split-hero-title-link{{color:{fg}!important;font-size:{desktop['title_size_rem']:.2f}rem!important;{title_display}}}"
+            f".split-hero-slogan{{color:{fg}!important;font-size:{desktop['slogan_size_rem']:.2f}rem!important;{slogan_display}}}"
+            "@media (max-width: 768px){"
+            f".split-header{{min-height:{mobile['header_min_height_vh']}vh!important;}}"
+            f".split-hero-image{{justify-content:{mobile['hero_image_position']}!important;}}"
+            f".split-hero-img{{max-width:{mobile['hero_image_size']}%!important;max-height:{mobile['hero_image_max_height_vh']}vh!important;}}"
+            f".split-hero-text{{margin-top:{mobile['hero_text_margin_top']}px!important;gap:{mobile['hero_text_gap']}px!important;align-items:{align_map[mobile['text_align']]}!important;text-align:{mobile['text_align']}!important;}}"
+            f".split-hero-title-link{{font-size:{mobile['title_size_rem']:.2f}rem!important;}}"
+            f".split-hero-slogan{{font-size:{mobile['slogan_size_rem']:.2f}rem!important;}}"
+            "}</style>"
+        )
+
+        image_src = html.escape(payload["hero_image"].strip() or "images/home/main_page_image.png", quote=True)
+        title = html.escape(payload["hero_title"])
+        link = html.escape(payload["hero_link"], quote=True)
+        slogan = html.escape(payload["hero_slogan"])
+
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html_text = f.read()
+
+        html_text = re.sub(r'<style id="homeEditorDynamicStyle">[\s\S]*?</style>\s*', "", html_text, flags=re.DOTALL)
+        if "</head>" in html_text:
+            html_text = html_text.replace("</head>", f"{style}\n</head>", 1)
+        html_text = re.sub(
+            r'<img[^>]*class="split-hero-img"[^>]*>',
+            f'<img src="{image_src}" alt="Hero" class="split-hero-img" onerror="this.src=\'images/home/main_page_image.png\'; this.onerror=null;">',
+            html_text,
+            count=1,
+        )
+        html_text = re.sub(
+            r'(<h1 class="split-hero-title"[^>]*>\s*)<a[^>]*class="split-hero-title-link"[^>]*>[\s\S]*?</a>(\s*</h1>)',
+            rf'\1<a href="{link}" class="split-hero-title-link">{title}</a>\2',
+            html_text,
+            flags=re.DOTALL,
+            count=1,
+        )
+        html_text = re.sub(
+            r'<p class="split-hero-slogan"[^>]*>[\s\S]*?</p>',
+            f'<p class="split-hero-slogan">{slogan}</p>',
+            html_text,
+            flags=re.DOTALL,
+            count=1,
+        )
+        with open(INDEX_HTML, "w", encoding="utf-8") as f:
+            f.write(html_text)
+
+    HomeManagerDialog.load_home_data = load_home_data
+    HomeManagerDialog._store_current_mode = _store_current_mode
+    HomeManagerDialog._load_mode_values = _load_mode_values
+    HomeManagerDialog._switch_mode = _switch_mode
+    HomeManagerDialog._add_scale = _add_scale
+    HomeManagerDialog._bind_entry = _bind_entry
+    HomeManagerDialog.create_text_tab = create_text_tab
+    HomeManagerDialog.create_image_tab = create_image_tab
+    HomeManagerDialog.create_ui = create_ui
+    HomeManagerDialog.load_current_values = load_current_values
+    HomeManagerDialog.load_image = load_image
+    HomeManagerDialog.remove_image = remove_image
+    HomeManagerDialog.load_preview_image = load_preview_image
+    HomeManagerDialog._current_payload = _current_payload
+    HomeManagerDialog.update_preview = update_preview
+    HomeManagerDialog.reset_defaults = reset_defaults
+    HomeManagerDialog.save = save
+    HomeManagerDialog.preview = preview
+    HomeManagerDialog.update_index_html = update_index_html
+
+
+_install_home_editor_final_v2()
+
+
+def _install_home_editor_final_v3():
+    """Add multi-slogan editor, per-slogan style, and color picker UX."""
+    prev_load_home_data = HomeManagerDialog.load_home_data
+    prev_create_image_tab = HomeManagerDialog.create_image_tab
+    prev_load_image = HomeManagerDialog.load_image
+    prev_remove_image = HomeManagerDialog.remove_image
+    prev_load_preview_image = HomeManagerDialog.load_preview_image
+
+    font_options = {
+        "Inter": "Inter, sans-serif",
+        "Cormorant": "Cormorant Garamond, Georgia, serif",
+        "Arial": "Arial, sans-serif",
+        "Georgia": "Georgia, serif",
+        "Times": "Times New Roman, serif",
+        "Verdana": "Verdana, sans-serif",
+    }
+
+    def _safe_css_font(value, fallback):
+        text = str(value or "").replace("\n", " ").replace("\r", " ")
+        text = re.sub(r"[{};]", "", text).strip()
+        return text or fallback
+
+    def _hex(value, fallback):
+        text = str(value or "").strip()
+        if text.startswith("#") and len(text) in {4, 7} and all(c in "0123456789abcdefABCDEF" for c in text[1:]):
+            return text.lower()
+        return fallback
+
+    def _clamp_i(value, lo, hi, default):
+        try:
+            num = int(float(value))
+        except Exception:
+            num = default
+        return max(lo, min(hi, num))
+
+    def _clamp_f(value, lo, hi, default):
+        try:
+            num = float(value)
+        except Exception:
+            num = default
+        return max(lo, min(hi, num))
+
+    def _sanitize_slogans(raw_items, fallback_text="DESIGN ANYTHING"):
+        items = []
+        if isinstance(raw_items, list):
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text", "")).strip()
+                if not text:
+                    continue
+                items.append(
+                    {
+                        "text": text,
+                        "font_family": _safe_css_font(
+                            item.get("font_family"),
+                            "Cormorant Garamond, Georgia, serif",
+                        ),
+                        "size_rem": _clamp_f(item.get("size_rem"), 0.6, 3.0, 1.0),
+                        "color": _hex(item.get("color"), "#ffffff"),
+                    }
+                )
+        if not items:
+            text = str(fallback_text or "DESIGN ANYTHING").strip() or "DESIGN ANYTHING"
+            items = [
+                {
+                    "text": text,
+                    "font_family": "Cormorant Garamond, Georgia, serif",
+                    "size_rem": 1.0,
+                    "color": "#ffffff",
+                }
+            ]
+        return items[:12]
+
+    def _tk_font_from_css(css_family):
+        name = str(css_family or "").split(",")[0].strip().strip("'\"")
+        return name or "Segoe UI"
+
+    def load_home_data(self):
+        data = prev_load_home_data(self)
+        if not isinstance(data, dict):
+            data = {}
+        merged = dict(data)
+
+        legacy_slogan = str(merged.get("hero_slogan", "")).strip()
+        merged["hero_slogans"] = _sanitize_slogans(merged.get("hero_slogans"), legacy_slogan or "DESIGN ANYTHING")
+        merged["hero_slogan"] = merged["hero_slogans"][0]["text"]
+        merged["header_bg_color"] = _hex(merged.get("header_bg_color"), "#000000")
+        merged["text_color"] = _hex(merged.get("text_color"), "#ffffff")
+        merged["hero_image_opacity"] = _clamp_i(merged.get("hero_image_opacity"), 10, 100, 100)
+        return merged
+
+    def _pick_color(self, target_var, swatch_widget, callback=None):
+        initial = _hex(target_var.get(), "#ffffff")
+        color = colorchooser.askcolor(color=initial, parent=self)[1]
+        if not color:
+            return
+        target_var.set(color.lower())
+        if swatch_widget is not None and swatch_widget.winfo_exists():
+            swatch_widget.configure(bg=target_var.get())
+        if callable(callback):
+            callback()
+        else:
+            self.update_preview()
+
+    def _refresh_slogan_list(self):
+        if not hasattr(self, "slogan_listbox"):
+            return
+        self.slogan_listbox.delete(0, tk.END)
+        for idx, item in enumerate(self.slogan_items, start=1):
+            label = item.get("text", "").strip() or f"SLOGAN {idx}"
+            if len(label) > 28:
+                label = label[:28] + "..."
+            self.slogan_listbox.insert(tk.END, f"{idx}. {label}")
+
+    def _load_slogan_editor(self, idx):
+        if not (0 <= idx < len(self.slogan_items)):
+            return
+        item = self.slogan_items[idx]
+        self._slogan_syncing = True
+        self.slogan_text_var.set(item.get("text", ""))
+        css_font = item.get("font_family", "Cormorant Garamond, Georgia, serif")
+        font_key = next((k for k, v in self.font_options.items() if v == css_font), "Cormorant")
+        self.slogan_font_key_var.set(font_key)
+        self.slogan_size_var.set(float(item.get("size_rem", 1.0)) * 10.0)
+        self.slogan_color_var.set(_hex(item.get("color"), "#ffffff"))
+        if hasattr(self, "slogan_color_swatch") and self.slogan_color_swatch.winfo_exists():
+            self.slogan_color_swatch.configure(bg=self.slogan_color_var.get())
+        self._slogan_syncing = False
+
+    def _on_slogan_select(self, _event=None):
+        if not hasattr(self, "slogan_listbox"):
+            return
+        selected = self.slogan_listbox.curselection()
+        if not selected:
+            return
+        self.current_slogan_index = int(selected[0])
+        self._load_slogan_editor(self.current_slogan_index)
+
+    def _apply_slogan_editor(self, *_args):
+        if getattr(self, "_slogan_syncing", False):
+            return
+        idx = getattr(self, "current_slogan_index", -1)
+        if not (0 <= idx < len(self.slogan_items)):
+            return
+
+        text = self.slogan_text_var.get().strip() or f"SLOGAN {idx + 1}"
+        font_css = self.font_options.get(self.slogan_font_key_var.get(), "Cormorant Garamond, Georgia, serif")
+        size_rem = _clamp_f(float(self.slogan_size_var.get()) / 10.0, 0.6, 3.0, 1.0)
+        color = _hex(self.slogan_color_var.get(), "#ffffff")
+
+        self.slogan_items[idx] = {
+            "text": text,
+            "font_family": font_css,
+            "size_rem": size_rem,
+            "color": color,
+        }
+        self._refresh_slogan_list()
+        self.slogan_listbox.selection_clear(0, tk.END)
+        self.slogan_listbox.selection_set(idx)
+        self.slogan_listbox.activate(idx)
+        self.update_preview()
+
+    def _add_slogan_item(self):
+        self.slogan_items.append(
+            {
+                "text": f"NEW SLOGAN {len(self.slogan_items) + 1}",
+                "font_family": "Cormorant Garamond, Georgia, serif",
+                "size_rem": 1.0,
+                "color": "#ffffff",
+            }
+        )
+        self._refresh_slogan_list()
+        new_idx = len(self.slogan_items) - 1
+        self.slogan_listbox.selection_clear(0, tk.END)
+        self.slogan_listbox.selection_set(new_idx)
+        self.slogan_listbox.activate(new_idx)
+        self.current_slogan_index = new_idx
+        self._load_slogan_editor(new_idx)
+        self.update_preview()
+
+    def _remove_slogan_item(self):
+        idx = getattr(self, "current_slogan_index", -1)
+        if not (0 <= idx < len(self.slogan_items)):
+            return
+        if len(self.slogan_items) == 1:
+            self.slogan_items[0] = {
+                "text": "DESIGN ANYTHING",
+                "font_family": "Cormorant Garamond, Georgia, serif",
+                "size_rem": 1.0,
+                "color": "#ffffff",
+            }
+            self.current_slogan_index = 0
+        else:
+            self.slogan_items.pop(idx)
+            self.current_slogan_index = max(0, idx - 1)
+        self._refresh_slogan_list()
+        self.slogan_listbox.selection_clear(0, tk.END)
+        self.slogan_listbox.selection_set(self.current_slogan_index)
+        self.slogan_listbox.activate(self.current_slogan_index)
+        self._load_slogan_editor(self.current_slogan_index)
+        self.update_preview()
+
+    def _make_color_row(self, parent, label_text, var, swatch_attr, callback=None):
+        row = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        row.pack(fill=tk.X, pady=4)
+        tk.Label(row, text=label_text, width=14, anchor="w", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(
+            side=tk.LEFT
+        )
+        swatch = tk.Label(row, bg=_hex(var.get(), "#ffffff"), width=3, relief="solid", borderwidth=1)
+        swatch.pack(side=tk.LEFT, padx=(0, 8), ipady=4)
+        setattr(self, swatch_attr, swatch)
+        tk.Button(
+            row,
+            text="\uc0c9\uc0c1 \uc120\ud0dd",
+            font=ModernStyle.get_font(9),
+            bg=ModernStyle.BG_LIGHT,
+            relief="solid",
+            borderwidth=1,
+            padx=10,
+            pady=4,
+            command=lambda: self._pick_color(var, swatch, callback),
+        ).pack(side=tk.LEFT)
+
+    def _add_scale(self, parent, text, var, frm, to, callback=None, resolution=1.0):
+        tk.Label(parent, text=text, font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(anchor="w", pady=(8, 0))
+
+        row = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        row.pack(fill=tk.X, pady=(2, 6))
+
+        number_var = tk.StringVar()
+
+        def _set_var_value(raw_value):
+            try:
+                numeric = float(raw_value)
+            except Exception:
+                try:
+                    numeric = float(var.get())
+                except Exception:
+                    numeric = float(frm)
+            numeric = max(float(frm), min(float(to), numeric))
+            if isinstance(var, tk.IntVar) and float(resolution) >= 1.0:
+                numeric = int(round(numeric))
+                var.set(int(numeric))
+                number_var.set(str(int(numeric)))
+            else:
+                numeric = round(numeric, 2)
+                var.set(float(numeric))
+                if float(resolution) >= 1.0:
+                    number_var.set(str(int(round(numeric))))
+                else:
+                    number_var.set(f"{numeric:.2f}".rstrip("0").rstrip("."))
+
+        def _notify(*_args):
+            if callable(callback):
+                callback()
+            else:
+                self.update_preview()
+
+        def _apply_from_spinbox(*_args):
+            _set_var_value(number_var.get())
+            _notify()
+
+        def _sync_from_var(*_args):
+            try:
+                current_value = var.get()
+            except Exception:
+                current_value = frm
+            if isinstance(var, tk.IntVar) and float(resolution) >= 1.0:
+                number_var.set(str(int(round(float(current_value)))))
+            else:
+                value = float(current_value)
+                if float(resolution) >= 1.0:
+                    number_var.set(str(int(round(value))))
+                else:
+                    number_var.set(f"{value:.2f}".rstrip("0").rstrip("."))
+
+        _sync_from_var()
+        var.trace_add("write", lambda *_args: _sync_from_var())
+
+        scale = tk.Scale(
+            row,
+            from_=frm,
+            to=to,
+            orient=tk.HORIZONTAL,
+            variable=var,
+            resolution=resolution,
+            length=250,
+            bg=ModernStyle.BG_WHITE,
+            highlightthickness=0,
+            command=lambda _v: _notify(),
+        )
+        scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        spin = ttk.Spinbox(
+            row,
+            from_=frm,
+            to=to,
+            increment=resolution,
+            textvariable=number_var,
+            width=7,
+            justify="right",
+            command=_apply_from_spinbox,
+        )
+        spin.pack(side=tk.LEFT, padx=(10, 0))
+        spin.bind("<Return>", _apply_from_spinbox)
+        spin.bind("<FocusOut>", _apply_from_spinbox)
+
+        return scale
+
+    def create_text_tab(self, parent):
+        wrap = tk.Frame(parent, bg=ModernStyle.BG_WHITE)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        for label, var in [
+            ("\uba54\uc778 \uc81c\ubaa9", self.hero_title_var),
+            ("\uc81c\ubaa9 \ub9c1\ud06c", self.hero_link_var),
+        ]:
+            row = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+            row.pack(fill=tk.X, pady=4)
+            tk.Label(row, text=label, width=14, anchor="w", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(
+                side=tk.LEFT
+            )
+            ent = tk.Entry(row, textvariable=var, font=ModernStyle.get_font(10), relief="solid", borderwidth=1)
+            ent.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+            self._bind_entry(ent)
+
+        self._make_color_row(wrap, "\ubc30\uacbd \uc0c9\uc0c1", self.bg_color_var, "bg_color_swatch", self.update_preview)
+        self._make_color_row(
+            wrap,
+            "\uc81c\ubaa9 \uc0c9\uc0c1",
+            self.text_color_var,
+            "text_color_swatch",
+            self.update_preview,
+        )
+
+        checks = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        checks.pack(fill=tk.X, pady=(8, 2))
+        tk.Checkbutton(
+            checks,
+            text="\uc81c\ubaa9 \ud45c\uc2dc",
+            variable=self.show_title_var,
+            bg=ModernStyle.BG_WHITE,
+            command=self.update_preview,
+        ).pack(side=tk.LEFT, padx=(0, 12))
+        tk.Checkbutton(
+            checks,
+            text="\uc11c\ube0c\ubb38\uad6c \ud45c\uc2dc",
+            variable=self.show_slogan_var,
+            bg=ModernStyle.BG_WHITE,
+            command=self.update_preview,
+        ).pack(side=tk.LEFT)
+
+        align = tk.Frame(wrap, bg=ModernStyle.BG_WHITE)
+        align.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(align, text="\ud14d\uc2a4\ud2b8 \uc815\ub82c", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(
+            side=tk.LEFT, padx=(0, 12)
+        )
+        for text, value in [("\uc67c\ucabd", "left"), ("\uac00\uc6b4\ub370", "center"), ("\uc624\ub978\ucabd", "right")]:
+            tk.Radiobutton(
+                align,
+                text=text,
+                value=value,
+                variable=self.text_align_var,
+                bg=ModernStyle.BG_WHITE,
+                command=self.update_preview,
+            ).pack(side=tk.LEFT, padx=(0, 8))
+
+        self._add_scale(wrap, "\uc81c\ubaa9 \ud06c\uae30 (x0.1rem)", self.title_size_var, 8, 40)
+        self._add_scale(wrap, "\uc81c\ubaa9-\uc11c\ube0c \uac04\uaca9(px)", self.text_gap_var, 0, 80)
+
+        section = tk.Frame(wrap, bg=ModernStyle.BG_WHITE, relief="solid", borderwidth=1)
+        section.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        tk.Label(
+            section,
+            text="\uc11c\ube0c\ubb38\uad6c \ubaa9\ub85d (\uac01 \ubb38\uad6c\ubcc4 \ud3f0\ud2b8/\ud06c\uae30/\uc0c9\uc0c1)",
+            font=ModernStyle.get_font(10, "bold"),
+            bg=ModernStyle.BG_WHITE,
+        ).pack(anchor="w", padx=10, pady=(8, 6))
+
+        section_body = tk.Frame(section, bg=ModernStyle.BG_WHITE)
+        section_body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        left = tk.Frame(section_body, bg=ModernStyle.BG_WHITE)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        self.slogan_listbox = tk.Listbox(
+            left,
+            height=8,
+            exportselection=False,
+            font=ModernStyle.get_font(9),
+            relief="solid",
+            borderwidth=1,
+            width=28,
+        )
+        self.slogan_listbox.pack(fill=tk.Y, expand=False)
+        self.slogan_listbox.bind("<<ListboxSelect>>", self._on_slogan_select)
+
+        left_btns = tk.Frame(left, bg=ModernStyle.BG_WHITE)
+        left_btns.pack(fill=tk.X, pady=(8, 0))
+        tk.Button(
+            left_btns,
+            text="+ \ubb38\uad6c \ucd94\uac00",
+            font=ModernStyle.get_font(9),
+            bg=ModernStyle.BG_LIGHT,
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=4,
+            command=self._add_slogan_item,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(
+            left_btns,
+            text="\uc120\ud0dd \uc0ad\uc81c",
+            font=ModernStyle.get_font(9),
+            bg=ModernStyle.BG_WHITE,
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=4,
+            command=self._remove_slogan_item,
+        ).pack(side=tk.LEFT)
+
+        right = tk.Frame(section_body, bg=ModernStyle.BG_WHITE)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        row = tk.Frame(right, bg=ModernStyle.BG_WHITE)
+        row.pack(fill=tk.X, pady=4)
+        tk.Label(row, text="\ubb38\uad6c", width=10, anchor="w", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(
+            side=tk.LEFT
+        )
+        ent = tk.Entry(row, textvariable=self.slogan_text_var, font=ModernStyle.get_font(10), relief="solid", borderwidth=1)
+        ent.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+        ent.bind("<KeyRelease>", self._apply_slogan_editor)
+        ent.bind("<FocusOut>", self._apply_slogan_editor)
+
+        row = tk.Frame(right, bg=ModernStyle.BG_WHITE)
+        row.pack(fill=tk.X, pady=4)
+        tk.Label(row, text="\ud3f0\ud2b8", width=10, anchor="w", font=ModernStyle.get_font(10), bg=ModernStyle.BG_WHITE).pack(
+            side=tk.LEFT
+        )
+        combo = ttk.Combobox(
+            row,
+            textvariable=self.slogan_font_key_var,
+            values=list(self.font_options.keys()),
+            state="readonly",
+            width=24,
+        )
+        combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        combo.bind("<<ComboboxSelected>>", self._apply_slogan_editor)
+
+        self._add_scale(
+            right,
+            "\ubb38\uad6c \ud06c\uae30 (x0.1rem)",
+            self.slogan_size_var,
+            6,
+            30,
+            self._apply_slogan_editor,
+        )
+
+        color_row = tk.Frame(right, bg=ModernStyle.BG_WHITE)
+        color_row.pack(fill=tk.X, pady=4)
+        tk.Label(
+            color_row,
+            text="\ubb38\uad6c \uc0c9\uc0c1",
+            width=10,
+            anchor="w",
+            font=ModernStyle.get_font(10),
+            bg=ModernStyle.BG_WHITE,
+        ).pack(side=tk.LEFT)
+        self.slogan_color_swatch = tk.Label(color_row, bg="#ffffff", width=3, relief="solid", borderwidth=1)
+        self.slogan_color_swatch.pack(side=tk.LEFT, padx=(0, 8), ipady=4)
+        tk.Button(
+            color_row,
+            text="\uc0c9\uc0c1 \uc120\ud0dd",
+            font=ModernStyle.get_font(9),
+            bg=ModernStyle.BG_LIGHT,
+            relief="solid",
+            borderwidth=1,
+            padx=10,
+            pady=4,
+            command=lambda: self._pick_color(
+                self.slogan_color_var, self.slogan_color_swatch, self._apply_slogan_editor
+            ),
+        ).pack(side=tk.LEFT)
+
+    def create_image_tab(self, parent):
+        prev_create_image_tab(self, parent)
+
+    def create_ui(self):
+        self.font_options = font_options.copy()
+        self.edit_mode_var = tk.StringVar(value="desktop")
+        self.mode_hint_var = tk.StringVar(value="\ud604\uc7ac \ud3b8\uc9d1 \ub300\uc0c1: PC")
+        self.mode_data = {"desktop": {}, "mobile": {}}
+        self._active_mode = "desktop"
+        self._slogan_syncing = False
+        self.current_slogan_index = 0
+
+        self.hero_title_var = tk.StringVar()
+        self.hero_link_var = tk.StringVar()
+        self.bg_color_var = tk.StringVar(value="#000000")
+        self.text_color_var = tk.StringVar(value="#ffffff")
+        self.show_title_var = tk.BooleanVar(value=True)
+        self.show_slogan_var = tk.BooleanVar(value=True)
+        self.title_size_var = tk.DoubleVar(value=15)
+        self.text_gap_var = tk.IntVar(value=12)
+
+        self.slogan_items = []
+        self.slogan_text_var = tk.StringVar()
+        self.slogan_font_key_var = tk.StringVar(value="Cormorant")
+        self.slogan_size_var = tk.DoubleVar(value=10)
+        self.slogan_color_var = tk.StringVar(value="#ffffff")
+
+        self.size_var = tk.IntVar(value=85)
+        self.height_var = tk.IntVar(value=50)
+        self.opacity_var = tk.IntVar(value=100)
+        self.position_var = tk.StringVar(value="center")
+        self.text_margin_var = tk.IntVar(value=50)
+        self.text_align_var = tk.StringVar(value="center")
+        self.min_height_var = tk.IntVar(value=100)
+
+        main = tk.Frame(self, bg=ModernStyle.BG_WHITE)
+        main.pack(fill=tk.BOTH, expand=True, padx=24, pady=16)
+        tk.Label(main, text="\ud648\ud654\uba74 \ud3b8\uc9d1", font=ModernStyle.get_font(16, "bold"), bg=ModernStyle.BG_WHITE).pack(
+            anchor="w"
+        )
+        tk.Label(
+            main,
+            text="\uc2e4\uc81c \ud648\ud654\uba74 \uae30\uc900\uc73c\ub85c PC/\ubaa8\ubc14\uc77c\uc744 \ubd84\ub9ac \uc218\uc815\ud558\uace0 \uc2e4\uc2dc\uac04 \ubbf8\ub9ac\ubcf4\uae30\uc5d0 \ubc18\uc601\ud569\ub2c8\ub2e4.",
+            font=ModernStyle.get_font(10),
+            bg=ModernStyle.BG_WHITE,
+            fg=ModernStyle.TEXT_MUTED,
+        ).pack(anchor="w", pady=(2, 10))
+
+        mode_row = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        mode_row.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(mode_row, text="\ud3b8\uc9d1 \ub300\uc0c1", font=ModernStyle.get_font(10, "bold"), bg=ModernStyle.BG_WHITE).pack(
+            side=tk.LEFT, padx=(0, 10)
+        )
+        tk.Radiobutton(
+            mode_row,
+            text="PC",
+            value="desktop",
+            variable=self.edit_mode_var,
+            bg=ModernStyle.BG_WHITE,
+            command=self._switch_mode,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Radiobutton(
+            mode_row,
+            text="\ubaa8\ubc14\uc77c",
+            value="mobile",
+            variable=self.edit_mode_var,
+            bg=ModernStyle.BG_WHITE,
+            command=self._switch_mode,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(
+            mode_row,
+            textvariable=self.mode_hint_var,
+            font=ModernStyle.get_font(9),
+            bg=ModernStyle.BG_WHITE,
+            fg=ModernStyle.TEXT_SUBTLE,
+        ).pack(side=tk.LEFT)
+
+        body = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        body.pack(fill=tk.BOTH, expand=True)
+        controls = tk.Frame(body, bg=ModernStyle.BG_WHITE)
+        controls.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12))
+        preview_panel = tk.Frame(body, bg=ModernStyle.BG_LIGHT, relief="solid", borderwidth=1)
+        preview_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        notebook = ttk.Notebook(controls)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        tab_text = tk.Frame(notebook, bg=ModernStyle.BG_WHITE)
+        notebook.add(tab_text, text="\ud14d\uc2a4\ud2b8/\uc11c\ube0c\ubb38\uad6c")
+        self.create_text_tab(tab_text)
+        tab_image = tk.Frame(notebook, bg=ModernStyle.BG_WHITE)
+        notebook.add(tab_image, text="\uc774\ubbf8\uc9c0/\ub808\uc774\uc544\uc6c3")
+        self.create_image_tab(tab_image)
+
+        tk.Label(
+            preview_panel,
+            text="\uc2e4\uc2dc\uac04 \ubbf8\ub9ac\ubcf4\uae30",
+            font=ModernStyle.get_font(10, "bold"),
+            bg=ModernStyle.BG_LIGHT,
+            fg=ModernStyle.TEXT_MUTED,
+        ).pack(pady=10)
+        self.preview_canvas = tk.Canvas(
+            preview_panel,
+            bg="#111111",
+            width=540,
+            height=410,
+            highlightthickness=1,
+            highlightbackground=ModernStyle.BORDER,
+        )
+        self.preview_canvas.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        self.preview_canvas.bind("<Configure>", lambda _e: self.update_preview())
+
+        btns = tk.Frame(main, bg=ModernStyle.BG_WHITE)
+        btns.pack(fill=tk.X, pady=(12, 0))
+        tk.Button(
+            btns,
+            text="\uae30\ubcf8\uac12 \ubcf5\uc6d0",
+            font=ModernStyle.get_font(10),
+            bg=ModernStyle.BG_WHITE,
+            relief="solid",
+            borderwidth=1,
+            padx=14,
+            pady=8,
+            command=self.reset_defaults,
+        ).pack(side=tk.LEFT)
+        tk.Button(
+            btns,
+            text="\ube0c\ub77c\uc6b0\uc800 \ubbf8\ub9ac\ubcf4\uae30",
+            font=ModernStyle.get_font(10),
+            bg=ModernStyle.BG_LIGHT,
+            relief="solid",
+            borderwidth=1,
+            padx=16,
+            pady=8,
+            command=self.preview,
+        ).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(
+            btns,
+            text="\ucde8\uc18c",
+            font=ModernStyle.get_font(10),
+            bg=ModernStyle.BG_WHITE,
+            relief="solid",
+            borderwidth=1,
+            padx=16,
+            pady=8,
+            command=self.destroy,
+        ).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(
+            btns,
+            text="\uc800\uc7a5",
+            font=ModernStyle.get_font(10, "bold"),
+            bg=ModernStyle.ACCENT,
+            fg=ModernStyle.BG_WHITE,
+            relief="flat",
+            padx=20,
+            pady=8,
+            command=self.save,
+        ).pack(side=tk.RIGHT)
+        self.bind("<Control-s>", lambda _e: self.save())
+
+    def _store_current_mode(self, mode_name=None):
+        mode = mode_name or self.edit_mode_var.get()
+        if mode not in {"desktop", "mobile"}:
+            mode = "desktop"
+        current = self.mode_data.get(mode, {})
+        self.mode_data[mode] = {
+            **current,
+            "hero_image_size": _clamp_i(self.size_var.get(), 20, 130, 85),
+            "hero_image_max_height_vh": _clamp_i(self.height_var.get(), 20, 95, 50),
+            "hero_image_position": str(self.position_var.get()).strip().lower(),
+            "hero_text_margin_top": _clamp_i(self.text_margin_var.get(), 0, 180, 50),
+            "hero_text_gap": _clamp_i(self.text_gap_var.get(), 0, 80, 12),
+            "title_size_rem": _clamp_f(float(self.title_size_var.get()) / 10.0, 0.7, 4.0, 1.5),
+            "slogan_size_rem": _clamp_f(current.get("slogan_size_rem", 1.0), 0.6, 3.0, 1.0),
+            "text_align": str(self.text_align_var.get()).strip().lower(),
+            "header_min_height_vh": _clamp_i(self.min_height_var.get(), 45, 120, 100),
+        }
+        if self.mode_data[mode]["hero_image_position"] not in {"left", "center", "right"}:
+            self.mode_data[mode]["hero_image_position"] = "center"
+        if self.mode_data[mode]["text_align"] not in {"left", "center", "right"}:
+            self.mode_data[mode]["text_align"] = "center"
+
+    def _load_mode_values(self, mode_name):
+        mode = mode_name if mode_name in {"desktop", "mobile"} else "desktop"
+        values = self.mode_data.get(mode, {})
+        self.size_var.set(_clamp_i(values.get("hero_image_size"), 20, 130, 85))
+        self.height_var.set(_clamp_i(values.get("hero_image_max_height_vh"), 20, 95, 50))
+        self.position_var.set(values.get("hero_image_position", "center"))
+        self.text_margin_var.set(_clamp_i(values.get("hero_text_margin_top"), 0, 180, 50))
+        self.text_gap_var.set(_clamp_i(values.get("hero_text_gap"), 0, 80, 12))
+        self.title_size_var.set(_clamp_f(values.get("title_size_rem"), 0.7, 4.0, 1.5) * 10.0)
+        self.text_align_var.set(values.get("text_align", "center"))
+        self.min_height_var.set(_clamp_i(values.get("header_min_height_vh"), 45, 120, 100))
+
+    def _switch_mode(self):
+        target = self.edit_mode_var.get()
+        if target not in {"desktop", "mobile"}:
+            target = "desktop"
+            self.edit_mode_var.set(target)
+        current = getattr(self, "_active_mode", target)
+        if current != target:
+            self._store_current_mode(current)
+            self._load_mode_values(target)
+            self._active_mode = target
+        mode_label = "PC" if target == "desktop" else "\ubaa8\ubc14\uc77c"
+        self.mode_hint_var.set(f"\ud604\uc7ac \ud3b8\uc9d1 \ub300\uc0c1: {mode_label}")
+        self.update_preview()
+
+    def load_current_values(self):
+        self.home_data = self.load_home_data()
+
+        self.hero_title_var.set(self.home_data.get("hero_title", "J-HR"))
+        self.hero_link_var.set(self.home_data.get("hero_link", "projects.html"))
+        self.bg_color_var.set(_hex(self.home_data.get("header_bg_color"), "#000000"))
+        self.text_color_var.set(_hex(self.home_data.get("text_color"), "#ffffff"))
+        self.show_title_var.set(bool(self.home_data.get("show_title", True)))
+        self.show_slogan_var.set(bool(self.home_data.get("show_slogan", True)))
+        self.opacity_var.set(_clamp_i(self.home_data.get("hero_image_opacity"), 10, 100, 100))
+
+        self.mode_data = {
+            "desktop": dict(self.home_data.get("desktop", {})),
+            "mobile": dict(self.home_data.get("mobile", {})),
+        }
+        self._active_mode = "desktop"
+        self.edit_mode_var.set("desktop")
+        self._load_mode_values("desktop")
+        self.mode_hint_var.set("\ud604\uc7ac \ud3b8\uc9d1 \ub300\uc0c1: PC")
+
+        self.slogan_items = _sanitize_slogans(self.home_data.get("hero_slogans"), self.home_data.get("hero_slogan"))
+        self.current_slogan_index = 0
+        self._refresh_slogan_list()
+        if self.slogan_items:
+            self.slogan_listbox.selection_set(0)
+            self.slogan_listbox.activate(0)
+            self._load_slogan_editor(0)
+
+        if hasattr(self, "bg_color_swatch") and self.bg_color_swatch.winfo_exists():
+            self.bg_color_swatch.configure(bg=self.bg_color_var.get())
+        if hasattr(self, "text_color_swatch") and self.text_color_swatch.winfo_exists():
+            self.text_color_swatch.configure(bg=self.text_color_var.get())
+
+        hero_image = str(self.home_data.get("hero_image", "")).strip()
+        if hero_image and (SCRIPT_DIR / hero_image).exists():
+            self.image_path = str(SCRIPT_DIR / hero_image)
+            self.image_path_label.config(text=f"\ud604\uc7ac \uc774\ubbf8\uc9c0: {hero_image}")
+            self.load_preview_image()
+        else:
+            self.image_path = None
+            self.image_preview = None
+            self.preview_scaled_image = None
+            self.image_path_label.config(text="\uc120\ud0dd\ub41c \uc774\ubbf8\uc9c0 \uc5c6\uc74c")
+
+        self.update_preview()
+
+    def _current_payload(self):
+        self._store_current_mode()
+        self._apply_slogan_editor()
+        slogans = _sanitize_slogans(self.slogan_items, "DESIGN ANYTHING")
+
+        payload = {
+            "schema": "split_home_v2",
+            "hero_title": self.hero_title_var.get().strip() or "J-HR",
+            "hero_link": self.hero_link_var.get().strip() or "projects.html",
+            "hero_slogans": slogans,
+            "hero_slogan": slogans[0]["text"],
+            "hero_image": "",
+            "header_bg_color": _hex(self.bg_color_var.get(), "#000000"),
+            "text_color": _hex(self.text_color_var.get(), "#ffffff"),
+            "hero_image_opacity": _clamp_i(self.opacity_var.get(), 10, 100, 100),
+            "show_title": bool(self.show_title_var.get()),
+            "show_slogan": bool(self.show_slogan_var.get()),
+            "desktop": dict(self.mode_data.get("desktop", {})),
+            "mobile": dict(self.mode_data.get("mobile", {})),
+        }
+        if self.image_path and Path(self.image_path).exists():
+            payload["hero_image"] = str(Path(self.image_path).relative_to(SCRIPT_DIR)).replace("\\", "/")
+
+        for key, value in payload["desktop"].items():
+            payload[key] = value
+        for key, value in payload["mobile"].items():
+            payload[f"mobile_{key}"] = value
+        return payload
+
+    def update_preview(self, *_args):
+        if not hasattr(self, "preview_canvas"):
+            return
+
+        self._store_current_mode()
+        mode = self.edit_mode_var.get() if self.edit_mode_var.get() in {"desktop", "mobile"} else "desktop"
+        mode_data = dict(self.mode_data.get(mode, {}))
+
+        slogans = [dict(item) for item in self.slogan_items]
+        idx = getattr(self, "current_slogan_index", -1)
+        if not getattr(self, "_slogan_syncing", False) and 0 <= idx < len(slogans):
+            slogans[idx] = {
+                "text": self.slogan_text_var.get().strip() or f"SLOGAN {idx + 1}",
+                "font_family": self.font_options.get(
+                    self.slogan_font_key_var.get(), "Cormorant Garamond, Georgia, serif"
+                ),
+                "size_rem": _clamp_f(float(self.slogan_size_var.get()) / 10.0, 0.6, 3.0, 1.0),
+                "color": _hex(self.slogan_color_var.get(), "#ffffff"),
+            }
+        slogans = _sanitize_slogans(slogans, "DESIGN ANYTHING")
+
+        canvas = self.preview_canvas
+        cw = max(int(canvas.winfo_width()), 540)
+        ch = max(int(canvas.winfo_height()), 410)
+        canvas.delete("all")
+        canvas.configure(bg=ModernStyle.BG_LIGHT)
+
+        if mode == "mobile":
+            vw = min(300, cw - 90)
+            vh = min(ch - 50, int(vw * 2.0))
+            vx = (cw - vw) // 2
+            vy = (ch - vh) // 2 + 8
+            canvas.create_rectangle(vx - 14, vy - 14, vx + vw + 14, vy + vh + 14, fill="#1b1b1b", outline="")
+            canvas.create_rectangle(vx - 8, vy - 8, vx + vw + 8, vy + vh + 8, outline="#6f6f6f", width=2)
+            canvas.create_text(cw // 2, 14, text="\ubaa8\ubc14\uc77c \ubbf8\ub9ac\ubcf4\uae30", fill="#8f8f8f", font=("Segoe UI", 9))
+        else:
+            vx, vy = 14, 30
+            vw, vh = cw - 28, ch - 44
+            canvas.create_text(cw // 2, 14, text="PC \ubbf8\ub9ac\ubcf4\uae30", fill="#8f8f8f", font=("Segoe UI", 9))
+
+        bg = _hex(self.bg_color_var.get(), "#000000")
+        title_color = _hex(self.text_color_var.get(), "#ffffff")
+        canvas.create_rectangle(vx, vy, vx + vw, vy + vh, fill=bg, outline="")
+
+        top_pad = 24 if mode == "mobile" else 30
+        max_w = max(40, int(vw * _clamp_i(mode_data.get("hero_image_size"), 20, 130, 85) / 100.0))
+        max_h = max(40, int(vh * _clamp_i(mode_data.get("hero_image_max_height_vh"), 20, 95, 50) / 100.0))
+        img_bottom = vy + int(vh * 0.30)
+        if self.image_preview is not None:
+            img = self.image_preview.copy()
+            img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+            alpha = max(0.1, min(1.0, _clamp_i(self.opacity_var.get(), 10, 100, 100) / 100.0))
+            img.putalpha(img.split()[-1].point(lambda p: int(p * alpha)))
+            self.preview_scaled_image = ImageTk.PhotoImage(img)
+            iw, ih = img.size
+            pos = str(mode_data.get("hero_image_position", "center")).lower()
+            if pos == "left":
+                ix = vx + 18 + iw // 2
+            elif pos == "right":
+                ix = vx + vw - 18 - iw // 2
+            else:
+                ix = vx + vw // 2
+            iy = vy + top_pad + ih // 2
+            img_bottom = iy + ih // 2
+            canvas.create_image(ix, iy, image=self.preview_scaled_image)
+        else:
+            pw = min(max_w, int(vw * 0.56))
+            ph = min(max_h, int(vh * 0.24))
+            px = vx + (vw - pw) // 2
+            py = vy + top_pad
+            img_bottom = py + ph
+            canvas.create_rectangle(px, py, px + pw, py + ph, outline="#757575", dash=(4, 4))
+            canvas.create_text(px + pw // 2, py + ph // 2, text="HERO IMAGE", fill="#999999", font=("Segoe UI", 9))
+
+        align = str(mode_data.get("text_align", "center")).lower()
+        if align == "left":
+            tx = vx + 28
+            anchor = "w"
+        elif align == "right":
+            tx = vx + vw - 28
+            anchor = "e"
+        else:
+            tx = vx + vw // 2
+            anchor = "center"
+
+        preview_scale = max(0.72, min(1.0, (vw / 760.0) if mode == "desktop" else (vw / 320.0)))
+        title_family = _tk_font_from_css(mode_data.get("title_font_family", "Inter, sans-serif"))
+        title_size = max(10, int(_clamp_f(mode_data.get("title_size_rem"), 0.7, 4.0, 1.5) * 16 * preview_scale))
+        gap = max(0, int(_clamp_i(mode_data.get("hero_text_gap"), 0, 80, 12) * preview_scale))
+        slogan_gap = max(4, int(_clamp_i(mode_data.get("hero_text_gap"), 0, 80, 12) * 0.55 * preview_scale))
+        y = int(img_bottom + _clamp_i(mode_data.get("hero_text_margin_top"), 0, 180, 50) * preview_scale)
+
+        if self.show_title_var.get():
+            canvas.create_text(
+                tx,
+                y,
+                text=self.hero_title_var.get().strip() or "J-HR",
+                anchor=anchor,
+                fill=title_color,
+                font=(title_family, title_size, "bold"),
+            )
+            y += title_size + gap
+
+        if self.show_slogan_var.get():
+            for item in slogans:
+                text = item.get("text", "").strip()
+                if not text:
+                    continue
+                size_px = max(9, int(_clamp_f(item.get("size_rem"), 0.6, 3.0, 1.0) * 16 * preview_scale))
+                color = _hex(item.get("color"), title_color)
+                family = _tk_font_from_css(item.get("font_family"))
+                canvas.create_text(tx, y, text=text, anchor=anchor, fill=color, font=(family, size_px))
+                y += size_px + slogan_gap
+
+    def reset_defaults(self):
+        self.home_data = self.load_home_data()
+        self.home_data["hero_slogans"] = _sanitize_slogans([], "DESIGN ANYTHING")
+        self.home_data["hero_slogan"] = self.home_data["hero_slogans"][0]["text"]
+        self.load_current_values()
+
+    def save(self, preview_only=False):
+        try:
+            payload = self._current_payload()
+            with open(HOME_DATA_JSON, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            self.update_index_html(payload)
+            self.home_data = payload
+            if not preview_only:
+                messagebox.showinfo("\uc800\uc7a5 \uc644\ub8cc", "\ud648\ud654\uba74 \uc124\uc815\uc774 \uc800\uc7a5\ub418\uc5c8\uc2b5\ub2c8\ub2e4.")
+        except Exception as e:
+            messagebox.showerror("\uc624\ub958", f"\uc800\uc7a5 \uc2e4\ud328: {e}")
+
+    def preview(self):
+        self.save(preview_only=True)
+        webbrowser.open(INDEX_HTML.as_uri())
+
+    def update_index_html(self, data):
+        if not INDEX_HTML.exists():
+            return
+
+        payload = dict(data if isinstance(data, dict) else {})
+        desktop_defaults = {
+            "hero_image_size": 85,
+            "hero_image_max_height_vh": 50,
+            "hero_image_position": "center",
+            "hero_text_margin_top": 50,
+            "hero_text_gap": 12,
+            "title_size_rem": 1.5,
+            "text_align": "center",
+            "header_min_height_vh": 100,
+        }
+        mobile_defaults = {
+            "hero_image_size": 90,
+            "hero_image_max_height_vh": 46,
+            "hero_image_position": "center",
+            "hero_text_margin_top": 38,
+            "hero_text_gap": 10,
+            "title_size_rem": 1.1,
+            "text_align": "center",
+            "header_min_height_vh": 70,
+        }
+        desktop = dict(payload.get("desktop", {})) if isinstance(payload.get("desktop"), dict) else {}
+        mobile = dict(payload.get("mobile", {})) if isinstance(payload.get("mobile"), dict) else {}
+        for key, default in desktop_defaults.items():
+            desktop[key] = desktop.get(key, payload.get(key, default))
+        for key, default in mobile_defaults.items():
+            mobile[key] = mobile.get(key, payload.get(f"mobile_{key}", default))
+
+        desktop["hero_image_size"] = _clamp_i(desktop.get("hero_image_size"), 20, 130, 85)
+        desktop["hero_image_max_height_vh"] = _clamp_i(desktop.get("hero_image_max_height_vh"), 20, 95, 50)
+        desktop["hero_text_margin_top"] = _clamp_i(desktop.get("hero_text_margin_top"), 0, 180, 50)
+        desktop["hero_text_gap"] = _clamp_i(desktop.get("hero_text_gap"), 0, 80, 12)
+        desktop["title_size_rem"] = _clamp_f(desktop.get("title_size_rem"), 0.7, 4.0, 1.5)
+        desktop["header_min_height_vh"] = _clamp_i(desktop.get("header_min_height_vh"), 45, 120, 100)
+        desktop["hero_image_position"] = str(desktop.get("hero_image_position", "center")).strip().lower()
+        desktop["text_align"] = str(desktop.get("text_align", "center")).strip().lower()
+        if desktop["hero_image_position"] not in {"left", "center", "right"}:
+            desktop["hero_image_position"] = "center"
+        if desktop["text_align"] not in {"left", "center", "right"}:
+            desktop["text_align"] = "center"
+
+        mobile["hero_image_size"] = _clamp_i(mobile.get("hero_image_size"), 20, 130, 90)
+        mobile["hero_image_max_height_vh"] = _clamp_i(mobile.get("hero_image_max_height_vh"), 20, 95, 46)
+        mobile["hero_text_margin_top"] = _clamp_i(mobile.get("hero_text_margin_top"), 0, 180, 38)
+        mobile["hero_text_gap"] = _clamp_i(mobile.get("hero_text_gap"), 0, 80, 10)
+        mobile["title_size_rem"] = _clamp_f(mobile.get("title_size_rem"), 0.7, 4.0, 1.1)
+        mobile["header_min_height_vh"] = _clamp_i(mobile.get("header_min_height_vh"), 45, 120, 70)
+        mobile["hero_image_position"] = str(mobile.get("hero_image_position", "center")).strip().lower()
+        mobile["text_align"] = str(mobile.get("text_align", "center")).strip().lower()
+        if mobile["hero_image_position"] not in {"left", "center", "right"}:
+            mobile["hero_image_position"] = "center"
+        if mobile["text_align"] not in {"left", "center", "right"}:
+            mobile["text_align"] = "center"
+
+        payload["hero_title"] = str(payload.get("hero_title", "J-HR") or "J-HR")
+        payload["hero_link"] = str(payload.get("hero_link", "projects.html") or "projects.html")
+        payload["header_bg_color"] = _hex(payload.get("header_bg_color"), "#000000")
+        payload["text_color"] = _hex(payload.get("text_color"), "#ffffff")
+        payload["hero_image_opacity"] = _clamp_i(payload.get("hero_image_opacity"), 10, 100, 100)
+        payload["show_title"] = bool(payload.get("show_title", True))
+        payload["show_slogan"] = bool(payload.get("show_slogan", True))
+        payload["hero_image"] = str(payload.get("hero_image", "") or "")
+
+        slogans = _sanitize_slogans(payload.get("hero_slogans"), payload.get("hero_slogan"))
+
+        align_map = {"left": "flex-start", "center": "center", "right": "flex-end"}
+        bg = _hex(payload.get("header_bg_color"), "#000000")
+        fg = _hex(payload.get("text_color"), "#ffffff")
+        opacity = _clamp_f(payload.get("hero_image_opacity", 100) / 100.0, 0.1, 1.0, 1.0)
+        title_display = "display:none!important;" if not payload.get("show_title", True) else ""
+        slogan_display = "display:none!important;" if not payload.get("show_slogan", True) else ""
+
+        desktop_gap = max(4, int(_clamp_i(desktop.get("hero_text_gap"), 0, 80, 12) * 0.55))
+        mobile_gap = max(4, int(_clamp_i(mobile.get("hero_text_gap"), 0, 80, 10) * 0.55))
+
+        style = (
+            '<style id="homeEditorDynamicStyle">'
+            f".split-header{{background:{bg}!important;min-height:{_clamp_i(desktop.get('header_min_height_vh'),45,120,100)}vh!important;}}"
+            f".split-hero-image{{justify-content:{desktop.get('hero_image_position','center')}!important;}}"
+            f".split-hero-img{{max-width:{_clamp_i(desktop.get('hero_image_size'),20,130,85)}%!important;"
+            f"max-height:{_clamp_i(desktop.get('hero_image_max_height_vh'),20,95,50)}vh!important;opacity:{opacity:.2f}!important;}}"
+            f".split-hero-text{{margin-top:{_clamp_i(desktop.get('hero_text_margin_top'),0,180,50)}px!important;"
+            f"gap:{_clamp_i(desktop.get('hero_text_gap'),0,80,12)}px!important;"
+            f"align-items:{align_map.get(desktop.get('text_align','center'),'center')}!important;"
+            f"text-align:{desktop.get('text_align','center')}!important;}}"
+            f".split-hero-title-link{{color:{fg}!important;font-size:{_clamp_f(desktop.get('title_size_rem'),0.7,4.0,1.5):.2f}rem!important;{title_display}}}"
+            f".split-hero-slogans{{display:flex;flex-direction:column;align-items:inherit;gap:{desktop_gap}px;margin:0;{slogan_display}}}"
+            ".split-hero-slogan-item{margin:0;line-height:1.25;text-transform:uppercase;}"
+            ".split-hero-slogan{display:none!important;}"
+            "@media (max-width: 768px){"
+            f".split-header{{min-height:{_clamp_i(mobile.get('header_min_height_vh'),45,120,70)}vh!important;}}"
+            f".split-hero-image{{justify-content:{mobile.get('hero_image_position','center')}!important;}}"
+            f".split-hero-img{{max-width:{_clamp_i(mobile.get('hero_image_size'),20,130,90)}%!important;"
+            f"max-height:{_clamp_i(mobile.get('hero_image_max_height_vh'),20,95,46)}vh!important;}}"
+            f".split-hero-text{{margin-top:{_clamp_i(mobile.get('hero_text_margin_top'),0,180,38)}px!important;"
+            f"gap:{_clamp_i(mobile.get('hero_text_gap'),0,80,10)}px!important;"
+            f"align-items:{align_map.get(mobile.get('text_align','center'),'center')}!important;"
+            f"text-align:{mobile.get('text_align','center')}!important;}}"
+            f".split-hero-title-link{{font-size:{_clamp_f(mobile.get('title_size_rem'),0.7,4.0,1.1):.2f}rem!important;}}"
+            f".split-hero-slogans{{gap:{mobile_gap}px;}}"
+            "}</style>"
+        )
+
+        slogan_items_html = []
+        for item in slogans:
+            text = html.escape(item.get("text", ""))
+            family = html.escape(_safe_css_font(item.get("font_family"), "Cormorant Garamond, Georgia, serif"), quote=True)
+            size = _clamp_f(item.get("size_rem"), 0.6, 3.0, 1.0)
+            color = _hex(item.get("color"), fg)
+            slogan_items_html.append(
+                f'<p class="split-hero-slogan-item" style="font-family:{family};font-size:{size:.2f}rem;color:{color};">{text}</p>'
+            )
+        slogans_html = f'<div class="split-hero-slogans">{"".join(slogan_items_html)}</div>'
+
+        image_src = html.escape(payload.get("hero_image", "").strip() or "images/home/main_page_image.png", quote=True)
+        title = html.escape(payload.get("hero_title", "J-HR"))
+        link = html.escape(payload.get("hero_link", "projects.html"), quote=True)
+
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html_text = f.read()
+
+        html_text = re.sub(r'<style id="homeEditorDynamicStyle">[\s\S]*?</style>\s*', "", html_text, flags=re.DOTALL)
+        if "</head>" in html_text:
+            html_text = html_text.replace("</head>", f"{style}\n</head>", 1)
+
+        html_text = re.sub(
+            r'<img[^>]*class="split-hero-img"[^>]*>',
+            f'<img src="{image_src}" alt="Hero" class="split-hero-img" onerror="this.src=\'images/home/main_page_image.png\'; this.onerror=null;">',
+            html_text,
+            count=1,
+        )
+        html_text = re.sub(
+            r'(<h1 class="split-hero-title"[^>]*>\s*)<a[^>]*class="split-hero-title-link"[^>]*>[\s\S]*?</a>(\s*</h1>)',
+            rf'\1<a href="{link}" class="split-hero-title-link">{title}</a>\2',
+            html_text,
+            flags=re.DOTALL,
+            count=1,
+        )
+
+        new_html, replaced = re.subn(
+            r'<div class="split-hero-slogans"[^>]*>[\s\S]*?</div>',
+            slogans_html,
+            html_text,
+            flags=re.DOTALL,
+            count=1,
+        )
+        if replaced == 0:
+            new_html, replaced = re.subn(
+                r'<p class="split-hero-slogan"[^>]*>[\s\S]*?</p>',
+                slogans_html,
+                html_text,
+                flags=re.DOTALL,
+                count=1,
+            )
+        if replaced == 0:
+            new_html = re.sub(
+                r'(<h1 class="split-hero-title"[^>]*>[\s\S]*?</h1>)',
+                rf"\1\n        {slogans_html}",
+                html_text,
+                flags=re.DOTALL,
+                count=1,
+            )
+        html_text = new_html
+
+        with open(INDEX_HTML, "w", encoding="utf-8") as f:
+            f.write(html_text)
+
+    HomeManagerDialog.load_home_data = load_home_data
+    HomeManagerDialog._pick_color = _pick_color
+    HomeManagerDialog._refresh_slogan_list = _refresh_slogan_list
+    HomeManagerDialog._load_slogan_editor = _load_slogan_editor
+    HomeManagerDialog._on_slogan_select = _on_slogan_select
+    HomeManagerDialog._apply_slogan_editor = _apply_slogan_editor
+    HomeManagerDialog._add_slogan_item = _add_slogan_item
+    HomeManagerDialog._remove_slogan_item = _remove_slogan_item
+    HomeManagerDialog._make_color_row = _make_color_row
+    HomeManagerDialog._add_scale = _add_scale
+    HomeManagerDialog.create_text_tab = create_text_tab
+    HomeManagerDialog.create_image_tab = create_image_tab
+    HomeManagerDialog.create_ui = create_ui
+    HomeManagerDialog._store_current_mode = _store_current_mode
+    HomeManagerDialog._load_mode_values = _load_mode_values
+    HomeManagerDialog._switch_mode = _switch_mode
+    HomeManagerDialog.load_current_values = load_current_values
+    HomeManagerDialog.load_image = prev_load_image
+    HomeManagerDialog.remove_image = prev_remove_image
+    HomeManagerDialog.load_preview_image = prev_load_preview_image
+    HomeManagerDialog._current_payload = _current_payload
+    HomeManagerDialog.update_preview = update_preview
+    HomeManagerDialog.reset_defaults = reset_defaults
+    HomeManagerDialog.save = save
+    HomeManagerDialog.preview = preview
+    HomeManagerDialog.update_index_html = update_index_html
+
+
+_install_home_editor_final_v3()
+
 
 if __name__ == "__main__":
     main()
+

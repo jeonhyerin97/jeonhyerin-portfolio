@@ -6,6 +6,8 @@ python home_editor_server.py
 """
 
 import http.server
+import ipaddress
+import socket
 import socketserver
 import json
 import shutil
@@ -27,6 +29,52 @@ IMAGES = DIR / "images" / "home"
 BACKUP = DIR / "editor_backups"
 BACKUP.mkdir(exist_ok=True)
 IMAGES.mkdir(parents=True, exist_ok=True)
+
+
+def _is_valid_lan_ip(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return addr.version == 4 and not (
+        addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified
+    )
+
+
+def _get_lan_ip() -> str:
+    candidates = []
+    seen = set()
+
+    def add(ip: str, priority: int):
+        if not ip:
+            return
+        ip = str(ip).strip()
+        if not _is_valid_lan_ip(ip) or ip in seen:
+            return
+        seen.add(ip)
+        try:
+            addr = ipaddress.ip_address(ip)
+            weight = priority if addr.is_private else priority + 50
+        except ValueError:
+            weight = priority + 100
+        candidates.append((weight, ip))
+
+    for probe in ("8.8.8.8", "1.1.1.1", "192.168.0.1", "10.0.0.1"):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect((probe, 80))
+                add(sock.getsockname()[0], 10)
+        except Exception:
+            pass
+
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            add(ip, 30)
+    except Exception:
+        pass
+
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1] if candidates else "127.0.0.1"
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -1101,11 +1149,13 @@ init();
 
 
 def main():
+    lan_ip = _get_lan_ip()
     print(f"""
 ╔═══════════════════════════════════════════════════════╗
 ║         🎨 홈 디자인 에디터 Pro v2.1                    ║
 ╠═══════════════════════════════════════════════════════╣
 ║  http://localhost:{PORT}                                ║
+║  http://{lan_ip}:{PORT}                                ║
 ║                                                       ║
 ║  ✨ 수정사항:                                          ║
 ║  • 흰색 배경 영역 표시 수정                             ║
@@ -1115,6 +1165,8 @@ def main():
 ║  종료: Ctrl+C                                         ║
 ╚═══════════════════════════════════════════════════════╝
 """)
+    if lan_ip == "127.0.0.1":
+        print("⚠ LAN IP를 찾지 못했습니다. 스마트폰 접속은 Windows 방화벽/네트워크 설정을 확인하세요.")
     
     auto_open = '--no-browser' not in sys.argv
     if auto_open:

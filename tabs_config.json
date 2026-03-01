@@ -19,12 +19,5 @@
     "file": "graphics.html",
     "visible": true,
     "order": 2
-  },
-  {
-    "id": "study",
-    "name": "STUDY",
-    "file": "study.html",
-    "visible": true,
-    "order": 3
   }
 ]

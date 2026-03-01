@@ -20,6 +20,10 @@
   let projectsData = [];
   let isOverlayOpen = false;
   let lastFocusedElement = null;
+  let armedGridIndex = -1;
+  let armedGridResetTimer = null;
+  const heroImagePreloadCache = new Map();
+  const heroImageResolvedSrc = new Map();
 
   // ============================================
   // DOM Elements
@@ -50,9 +54,47 @@
       }
     }
 
-    // Bind grid item clicks
+    // Bind grid item clicks (desktop: one click open / touch: arm then open)
     gridItems.forEach((btn, index) => {
-      btn.addEventListener('click', () => openProject(index));
+      const preloadHero = () => {
+        const project = projectsData[index];
+        if (project) preloadProjectHeroImage(project);
+      };
+
+      btn.addEventListener('pointerenter', preloadHero);
+      btn.addEventListener('focus', preloadHero);
+      btn.addEventListener('touchstart', preloadHero, { passive: true });
+
+      btn.addEventListener('click', (e) => {
+        if (isDesktopDirectOpenMode()) {
+          e.preventDefault();
+          clearArmedGridItem();
+          openProject(index);
+          return;
+        }
+
+        if (armedGridIndex === index) {
+          clearArmedGridItem();
+          openProject(index);
+          return;
+        }
+
+        e.preventDefault();
+        armGridItem(index);
+      });
+
+      btn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          clearArmedGridItem();
+          openProject(index);
+        }
+      });
+    });
+
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('.grid-item-btn')) return;
+      clearArmedGridItem();
     });
 
     // Bind overlay events
@@ -87,10 +129,54 @@
     
     // 푸터 프로젝트 목록 렌더링
     renderFooterProjects();
+    primeInitialHeroImages();
+
+    openProjectFromQueryParam();
+    applyAboutAffiliationMobileBreak();
+    syncAboutAlignmentAxis();
+    const handleAboutResponsiveLayout = () => {
+      syncAboutAlignmentAxis();
+      applyAboutAffiliationMobileBreak();
+    };
+    window.addEventListener('resize', handleAboutResponsiveLayout);
+    window.addEventListener('load', handleAboutResponsiveLayout);
     
   }
   
   // 그리드 아이템 개수에 따라 archive-count 업데이트
+  function clearArmedGridItem() {
+    if (armedGridResetTimer) {
+      clearTimeout(armedGridResetTimer);
+      armedGridResetTimer = null;
+    }
+
+    if (armedGridIndex < 0) return;
+
+    const armedItem = gridItemContainers[armedGridIndex];
+    if (armedItem) {
+      armedItem.classList.remove('grid-item--armed');
+    }
+    armedGridIndex = -1;
+  }
+
+  function armGridItem(index) {
+    clearArmedGridItem();
+    const item = gridItemContainers[index];
+    if (!item) return;
+
+    item.classList.add('grid-item--armed');
+    armedGridIndex = index;
+
+    armedGridResetTimer = setTimeout(() => {
+      clearArmedGridItem();
+    }, 2400);
+  }
+
+  function isDesktopDirectOpenMode() {
+    return window.matchMedia('(hover: hover) and (pointer: fine)').matches &&
+      window.matchMedia('(min-width: 1025px)').matches;
+  }
+
   function updateArchiveCount() {
     const archiveCount = document.querySelector('.archive-count');
     if (!archiveCount) return;
@@ -105,188 +191,240 @@
       word.charAt(0).toUpperCase() + word.slice(1)
     ).join(' ');
   }
-  
-  // 현재 페이지 타입 감지
-  function getCurrentPageType() {
-    const path = window.location.pathname.toLowerCase();
-    if (path.includes('drawings.html')) return 'drawings';
-    if (path.includes('graphics.html')) return 'graphics';
-    if (path.includes('study.html')) return 'study';
-    if (path.includes('about.html')) return 'about';
-    if (path.includes('index.html') || path.endsWith('/')) return 'index';
-    return 'projects'; // projects.html
+
+  function normalizeProjectKey(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/&/g, 'and')
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
+  function syncAboutAlignmentAxis() {
+    if (!document.body || !document.body.classList.contains('page-about')) return;
+
+    const logo = document.querySelector('.nav--archive .nav-logo');
+    if (!logo) return;
+
+    const logoWidth = logo.getBoundingClientRect().width;
+    if (!logoWidth) return;
+
+    document.body.style.setProperty('--about-nav-logo-width', `${logoWidth}px`);
+  }
+
+  function applyAboutAffiliationMobileBreak() {
+    if (!document.body || !document.body.classList.contains('page-about')) return;
+
+    const affiliation = document.querySelector('.about-affiliation');
+    if (!affiliation) return;
+
+    if (!affiliation.dataset.originalHtml) {
+      affiliation.dataset.originalHtml = affiliation.innerHTML;
+    }
+
+    const originalHtml = affiliation.dataset.originalHtml || '';
+    const isMobile = window.matchMedia('(max-width: 640px)').matches;
+
+    if (!isMobile) {
+      affiliation.innerHTML = originalHtml;
+      return;
+    }
+
+    const mobileHtml = originalHtml.replace(
+      /,\s*Dept\. of\s*/i,
+      ',<br>Dept. of '
+    );
+    affiliation.innerHTML = mobileHtml;
+  }
+
+  function findProjectIndexFromParam(param) {
+    const normalizedParam = normalizeProjectKey(param);
+    if (!normalizedParam) return -1;
+
+    return projectsData.findIndex((project) => {
+      const keys = [
+        project.slug,
+        project.display_title,
+        project.title,
+        project.index
+      ];
+      return keys.some(key => normalizeProjectKey(key) === normalizedParam);
+    });
+  }
+
+  function openProjectFromQueryParam() {
+    if (!overlay || !projectsData.length) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const projectParam = params.get('project');
+    const forceOpen = params.get('autopopup') === '1';
+    if (!projectParam && !forceOpen) return;
+
+    let projectIndex = findProjectIndexFromParam(projectParam);
+    if (projectIndex < 0) {
+      if (!forceOpen) return;
+      projectIndex = 0;
+    }
+
+    requestAnimationFrame(() => openProject(projectIndex));
   }
   
+  function getCurrentPageFile() {
+    const path = window.location.pathname || '';
+    const file = path.split('/').pop().toLowerCase();
+    return file || 'index.html';
+  }
+
+  function normalizeFooterTabsData(footerData) {
+    if (footerData && Array.isArray(footerData.tabs) && footerData.tabs.length) {
+      return footerData.tabs.filter(tab => tab && tab.visible !== false).map(tab => ({
+        id: tab.id || '',
+        name: tab.name || (tab.id || '').toUpperCase(),
+        file: tab.file || '',
+        items: Array.isArray(tab.items) ? tab.items : []
+      }));
+    }
+
+    const legacyTabs = [
+      { id: 'projects', name: 'PROJECTS', file: 'projects.html', items: footerData && Array.isArray(footerData.projects) ? footerData.projects : [] },
+      { id: 'drawings', name: 'DRAWINGS', file: 'drawings.html', items: footerData && Array.isArray(footerData.drawings) ? footerData.drawings : [] },
+      { id: 'graphics', name: 'GRAPHICS', file: 'graphics.html', items: footerData && Array.isArray(footerData.graphics) ? footerData.graphics : [] }
+    ];
+
+    return legacyTabs.filter(tab => tab.items.length > 0);
+  }
+
+  function applyFooterDensity(columnsEl) {
+    columnsEl.classList.remove('footer-columns--compact', 'footer-columns--tight');
+    if (window.matchMedia('(max-width: 768px)').matches) return;
+
+    const columnCount = columnsEl.querySelectorAll('.footer-column').length;
+    if (columnCount >= 6) {
+      columnsEl.classList.add('footer-columns--compact');
+    }
+    if (columnCount >= 8) {
+      columnsEl.classList.add('footer-columns--tight');
+    }
+
+    if (columnsEl.scrollWidth > columnsEl.clientWidth + 2) {
+      columnsEl.classList.add('footer-columns--compact');
+      if (columnsEl.scrollWidth > columnsEl.clientWidth + 2) {
+        columnsEl.classList.add('footer-columns--tight');
+      }
+    }
+  }
+
+  function renderFooterColumns(columnsEl, footerTabs) {
+    const currentFile = getCurrentPageFile();
+
+    columnsEl.classList.add('footer-columns--dynamic');
+    columnsEl.style.setProperty('--footer-column-count', String(Math.max(footerTabs.length, 1)));
+    columnsEl.innerHTML = footerTabs
+      .map((tab, tabIndex) => {
+        const tabFile = String(tab.file || '').toLowerCase();
+        const isCurrentTab = tabFile && tabFile === currentFile;
+        const title = String(tab.name || tab.id || '').toUpperCase();
+        const safeHref = tab.file || '#';
+
+        const visibleItems = (Array.isArray(tab.items) ? tab.items : []).filter(item => item && item.visible !== false);
+        const linksHtml = visibleItems.length
+          ? visibleItems
+              .map((item, itemIndex) => {
+                const label = toTitleCase(item.title || '');
+                if (isCurrentTab && overlay && projectsData.length) {
+                  return `<a href="#" class="footer-project-link" data-footer-current="1" data-project="${itemIndex}">${label}</a>`;
+                }
+                return `<a href="${safeHref}" class="footer-project-link">${label}</a>`;
+              })
+              .join('')
+          : `<a href="${safeHref}" class="footer-project-link">${toTitleCase(title)}</a>`;
+
+        return `
+          <div class="footer-column" data-footer-tab="${tab.id || tabIndex}">
+            <div class="footer-projects-wrapper">
+              <h3 class="footer-section-title">${title}</h3>
+              <nav class="footer-projects">${linksHtml}</nav>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+
+    columnsEl.querySelectorAll('[data-footer-current="1"]').forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const projectIndex = parseInt(link.dataset.project || '-1', 10);
+        if (!Number.isFinite(projectIndex) || projectIndex < 0) return;
+        openProject(projectIndex);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    });
+
+    applyFooterDensity(columnsEl);
+  }
+
   // 푸터 전체 렌더링
   function renderFooterProjects() {
-    const pageType = getCurrentPageType();
-    
-    // 푸터 요소 확인 (index.html은 다른 푸터 구조 사용)
-    const footerProjectList = document.getElementById('footerProjectList');
-    if (!footerProjectList) return; // 푸터가 없으면 종료
-    
-    // footerData가 있으면 사용 (로컬 파일 시스템에서도 작동)
+    const columnsEl = document.querySelector('.site-footer .footer-columns');
+    if (!columnsEl) return;
+
+    let footerData = {};
     const footerDataEl = document.getElementById('footerData');
     if (footerDataEl) {
       try {
-        const footerData = JSON.parse(footerDataEl.textContent);
-        
-        // Projects 렌더링
-        if (footerData.projects) {
-          renderFooterFromData('footerProjectList', footerData.projects, 'projects.html', pageType === 'projects');
-        }
-        // Drawings 렌더링
-        if (footerData.drawings) {
-          renderFooterFromData('footerDrawingList', footerData.drawings, 'drawings.html', pageType === 'drawings');
-        }
-        // Graphics 렌더링
-        if (footerData.graphics) {
-          renderFooterFromData('footerGraphicList', footerData.graphics, 'graphics.html', pageType === 'graphics');
-        }
-        return;
+        footerData = JSON.parse(footerDataEl.textContent || '{}');
       } catch (e) {
-        console.warn('footerData 파싱 실패, 기존 방식 사용:', e);
+        console.warn('footerData 파싱 실패:', e);
       }
     }
-    
-    // footerData가 없으면 기존 방식 사용 (fetch)
-    if (pageType === 'projects') {
-      renderFooterSectionWithData('footerProjectList', projectsData, true);
-      fetchAndRenderFooterSection('drawings.html', 'footerDrawingList', 'drawings.html');
-      fetchAndRenderFooterSection('graphics.html', 'footerGraphicList', 'graphics.html');
-    } else if (pageType === 'drawings') {
-      fetchAndRenderFooterSection('projects.html', 'footerProjectList', 'projects.html');
-      renderFooterSectionWithData('footerDrawingList', projectsData, true);
-      fetchAndRenderFooterSection('graphics.html', 'footerGraphicList', 'graphics.html');
-    } else if (pageType === 'graphics') {
-      fetchAndRenderFooterSection('projects.html', 'footerProjectList', 'projects.html');
-      fetchAndRenderFooterSection('drawings.html', 'footerDrawingList', 'drawings.html');
-      renderFooterSectionWithData('footerGraphicList', projectsData, true);
-    } else {
-      // about 또는 다른 페이지: 모든 섹션을 fetch로 가져오기
-      fetchAndRenderFooterSection('projects.html', 'footerProjectList', 'projects.html');
-      fetchAndRenderFooterSection('drawings.html', 'footerDrawingList', 'drawings.html');
-      fetchAndRenderFooterSection('graphics.html', 'footerGraphicList', 'graphics.html');
+
+    const navTabs = Array.from(document.querySelectorAll('.nav-links .nav-link'))
+      .map(link => ({
+        id: (link.textContent || '').trim().toLowerCase(),
+        name: (link.textContent || '').trim(),
+        file: link.getAttribute('href') || '',
+        items: []
+      }))
+      .filter(tab => tab.file && !tab.file.toLowerCase().includes('about.html'));
+    const navFileSet = new Set(navTabs.map(tab => String(tab.file || '').toLowerCase()));
+
+    let footerTabs = normalizeFooterTabsData(footerData);
+    if (navFileSet.size) {
+      footerTabs = footerTabs.filter(tab => navFileSet.has(String(tab.file || '').toLowerCase()));
     }
-  }
-  
-  // footerData에서 푸터 섹션 렌더링
-  function renderFooterFromData(elementId, data, targetPage, isCurrentPage) {
-    const footerList = document.getElementById(elementId);
-    if (!footerList || !data || data.length === 0) return;
-    
-    footerList.innerHTML = data
-      .filter(p => p.visible !== false)
-      .map((project, index) => {
-        const title = project.title || '';
-        const formattedTitle = toTitleCase(title);
-        if (isCurrentPage) {
-          return `<a href="#" class="footer-project-link" data-project="${index}">${formattedTitle}</a>`;
-        } else {
-          return `<a href="${targetPage}" class="footer-project-link">${formattedTitle}</a>`;
-        }
-      })
-      .join('');
-    
-    // 현재 페이지인 경우 클릭 이벤트 바인딩
-    if (isCurrentPage) {
-      footerList.querySelectorAll('.footer-project-link').forEach(link => {
-        link.addEventListener('click', (e) => {
-          e.preventDefault();
-          const projectIndex = parseInt(link.dataset.project, 10);
-          openProject(projectIndex);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        });
-      });
+    if (!footerTabs.length) {
+      footerTabs = navTabs;
     }
-  }
-  
-  // 현재 페이지 데이터로 푸터 섹션 렌더링
-  function renderFooterSectionWithData(elementId, data, isCurrentPage) {
-    const footerList = document.getElementById(elementId);
-    if (!footerList || !data || data.length === 0) return;
-    
-    footerList.innerHTML = data
-      .filter(p => p.visible !== false)
-      .map((project, index) => {
-        const title = project.display_title || project.title;
-        const formattedTitle = toTitleCase(title);
-        if (isCurrentPage) {
-          return `<a href="#" class="footer-project-link" data-project="${index}">${formattedTitle}</a>`;
-        } else {
-          return `<a href="#" class="footer-project-link">${formattedTitle}</a>`;
-        }
-      })
-      .join('');
-    
-    // 현재 페이지인 경우만 클릭 이벤트 바인딩 (프로젝트 열기)
-    if (isCurrentPage) {
-      footerList.querySelectorAll('.footer-project-link').forEach(link => {
-        link.addEventListener('click', (e) => {
-          e.preventDefault();
-          const projectIndex = parseInt(link.dataset.project, 10);
-          openProject(projectIndex);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        });
-      });
-    }
-  }
-  
-  // 다른 페이지에서 데이터 가져와서 푸터 섹션 렌더링
-  async function fetchAndRenderFooterSection(htmlFile, elementId, targetPage) {
-    const footerList = document.getElementById(elementId);
-    if (!footerList) return;
-    
-    try {
-      const response = await fetch(htmlFile);
-      if (!response.ok) return;
-      
-      const html = await response.text();
-      
-      // <script type="application/json" id="projectsData"> 형태로 저장된 JSON 추출
-      const match = html.match(/<script[^>]*id=["']projectsData["'][^>]*>([\s\S]*?)<\/script>/i);
-      if (!match) {
-        console.warn(`projectsData not found in ${htmlFile}`);
-        return;
-      }
-      
-      try {
-        const data = JSON.parse(match[1].trim());
-        renderFetchedFooterSection(footerList, data, targetPage);
-      } catch (parseError) {
-        console.error('JSON parse error:', parseError);
-      }
-        
-    } catch (e) {
-      console.error(`Failed to load footer data from ${htmlFile}:`, e);
-    }
-  }
-  
-  // fetch된 데이터로 푸터 섹션 렌더링
-  function renderFetchedFooterSection(footerList, data, targetPage) {
-    if (!data || data.length === 0) return;
-    
-    footerList.innerHTML = data
-      .filter(p => p.visible !== false)
-      .map((project) => {
-        const title = project.display_title || project.title;
-        const formattedTitle = toTitleCase(title);
-        return `<a href="${targetPage}" class="footer-project-link">${formattedTitle}</a>`;
-      })
-      .join('');
+    if (!footerTabs.length) return;
+
+    renderFooterColumns(columnsEl, footerTabs);
+    window.addEventListener('resize', () => applyFooterDensity(columnsEl));
   }
   
   // 썸네일 이미지 lazy loading + fallback 처리
   function handleThumbnailFallback() {
     const thumbs = document.querySelectorAll('.grid-thumb');
-    
-    // Intersection Observer로 뷰포트에 보일 때만 이미지 로드
+    if (!thumbs.length) return;
+
+    // iPad/Safari에서 observer 콜백 지연 시 그리드가 비어 보이지 않도록 기본 표시
+    thumbs.forEach(thumb => {
+      thumb.classList.add('loaded');
+    });
+
+    // Intersection Observer로 뷰포트에 보일 때 이미지 로드
     const observerOptions = {
       root: null,
       rootMargin: '100px', // 100px 전에 미리 로드 시작
       threshold: 0.01
     };
-    
+
+    // 구형 브라우저(일부 iPad 포함) 호환 fallback
+    if (typeof IntersectionObserver !== 'function') {
+      thumbs.forEach(thumb => {
+        loadThumbnail(thumb);
+      });
+      return;
+    }
+
     const imageObserver = new IntersectionObserver((entries, observer) => {
       entries.forEach(entry => {
         if (entry.isIntersecting) {
@@ -296,12 +434,102 @@
         }
       });
     }, observerOptions);
-    
+
     thumbs.forEach(thumb => {
-      // 초기에는 배경 이미지 제거 (placeholder만 표시)
-      thumb.style.backgroundImage = 'none';
       imageObserver.observe(thumb);
     });
+
+    // Observer가 동작하지 않는 환경에서 최종 fallback
+    window.setTimeout(() => {
+      thumbs.forEach(thumb => {
+        if (!thumb.classList.contains('loaded')) {
+          loadThumbnail(thumb);
+        }
+      });
+    }, 1200);
+  }
+
+  function getProjectImageBasePath(project) {
+    if (!project) return '';
+
+    const isDrawings = window.location.pathname.includes('drawings');
+    const isGraphics = window.location.pathname.includes('graphics');
+    const imageFolder = isDrawings ? 'images/drawings' : (isGraphics ? 'images/graphics' : 'images/projects');
+    const slug = project.slug || project.title.toLowerCase().replace(/\s+/g, '-');
+    return `${imageFolder}/${slug}`;
+  }
+
+  function getProjectHeroCandidates(project) {
+    const basePath = getProjectImageBasePath(project);
+    if (!basePath) return [];
+
+    return [
+      `${basePath}/main.jpg`,
+      `${basePath}/main.webp`,
+      `${basePath}/cover.jpg`,
+      `${basePath}/cover.webp`,
+      `${basePath}/thumb.jpg`,
+      `${basePath}/thumb.webp`
+    ];
+  }
+
+  function preloadImageSequence(candidates) {
+    if (!candidates.length) return Promise.resolve('');
+
+    return new Promise((resolve) => {
+      const tryLoad = (index) => {
+        if (index >= candidates.length) {
+          resolve('');
+          return;
+        }
+
+        const img = new Image();
+        img.onload = () => resolve(candidates[index]);
+        img.onerror = () => tryLoad(index + 1);
+        img.src = candidates[index];
+      };
+
+      tryLoad(0);
+    });
+  }
+
+  function preloadProjectHeroImage(project) {
+    const basePath = getProjectImageBasePath(project);
+    if (!basePath) return Promise.resolve('');
+
+    if (heroImagePreloadCache.has(basePath)) {
+      return heroImagePreloadCache.get(basePath);
+    }
+
+    const preloadPromise = preloadImageSequence(getProjectHeroCandidates(project)).then((resolvedSrc) => {
+      if (resolvedSrc) {
+        heroImageResolvedSrc.set(basePath, resolvedSrc);
+      }
+      return resolvedSrc;
+    });
+
+    heroImagePreloadCache.set(basePath, preloadPromise);
+    return preloadPromise;
+  }
+
+  function primeInitialHeroImages() {
+    if (!projectsData.length) return;
+
+    const preloadCount = window.matchMedia('(max-width: 768px)').matches ? 4 : 2;
+    const kickoff = () => {
+      projectsData.slice(0, preloadCount).forEach((project, index) => {
+        window.setTimeout(() => {
+          preloadProjectHeroImage(project);
+        }, index * 120);
+      });
+    };
+
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(kickoff, { timeout: 1200 });
+      return;
+    }
+
+    window.setTimeout(kickoff, 120);
   }
   
   // 개별 썸네일 로드 (jpg, webp 모두 지원)
@@ -356,9 +584,11 @@
   
   function openProject(index) {
     if (!overlay || !projectsData.length) return;
+    clearArmedGridItem();
 
     currentProjectIndex = index;
     lastFocusedElement = document.activeElement;
+    preloadProjectHeroImage(projectsData[index]);
 
     // Update overlay content
     renderProjectDetail(projectsData[index]);
@@ -370,6 +600,11 @@
     isOverlayOpen = true;
     overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('overlay-open');
+
+    const detail = overlay.querySelector('.project-detail');
+    if (detail) {
+      requestOverlayRevealRefresh(detail);
+    }
 
     // Focus management - focus close button after transition
     setTimeout(() => {
@@ -401,6 +636,10 @@
       renderProjectDetail(projectsData[currentProjectIndex]);
       updateNavButtons();
       scrollOverlayToTop();
+      const detail = overlay ? overlay.querySelector('.project-detail') : null;
+      if (detail) {
+        requestOverlayRevealRefresh(detail);
+      }
     }
   }
 
@@ -410,6 +649,10 @@
       renderProjectDetail(projectsData[currentProjectIndex]);
       updateNavButtons();
       scrollOverlayToTop();
+      const detail = overlay ? overlay.querySelector('.project-detail') : null;
+      if (detail) {
+        requestOverlayRevealRefresh(detail);
+      }
     }
   }
 
@@ -461,96 +704,163 @@
 
     const detail = overlay.querySelector('.project-detail');
     if (!detail) return;
-
-    // Determine if this is a drawings, graphics, or projects page
-    const isDrawings = window.location.pathname.includes('drawings');
-    const isGraphics = window.location.pathname.includes('graphics');
+    detail.classList.add('project-detail--desktop-sidebar');
+    detail.classList.remove('project-detail--lang-kr');
 
     // Build meta HTML based on available fields
     let metaHTML = '';
 
-    if (project.location) {
-      metaHTML += `
-        <div class="meta-item">
-          <span class="meta-label">LOCATION</span>
-          <span class="meta-value">${escapeHtml(project.location)}</span>
-        </div>
-      `;
-    }
-    
-    if (project.duration) {
-      metaHTML += `
-        <div class="meta-item">
-          <span class="meta-label">DURATION</span>
-          <span class="meta-value">${escapeHtml(project.duration)}</span>
-        </div>
-      `;
+    const baseMetaFields = [
+      { key: 'location', label: 'LOCATION' },
+      { key: 'duration', label: 'DURATION' },
+      { key: 'program', label: 'PROGRAM' },
+      { key: 'studio', label: 'STUDIO' },
+    ];
+    const reservedMetaLabels = new Set([
+      'LOCATION',
+      'DURATION',
+      'PROGRAM',
+      'STUDIO'
+    ]);
+    const baseMetaFieldMap = new Map(baseMetaFields.map((field) => [field.key, field]));
+    const customMetaFields = Array.isArray(project.custom_fields)
+      ? project.custom_fields
+          .filter((field) => {
+            if (!field || !field.label || !field.value) return false;
+            return !reservedMetaLabels.has(String(field.label).trim().toUpperCase());
+          })
+          .map((field, index) => {
+            const fieldId = typeof field.id === 'string' && field.id ? field.id : `index-${index}`;
+            const normalizedLabel = String(field.label || '').trim().toUpperCase();
+            const aliases = new Set([
+              fieldId,
+              `custom:${fieldId}`,
+              normalizedLabel ? `label:${normalizedLabel}` : ''
+            ]);
+            return {
+              id: fieldId,
+              token: `custom:${fieldId}`,
+              label: field.label,
+              value: field.value,
+              aliases,
+            };
+          })
+      : [];
+    const customMetaFieldMap = new Map(customMetaFields.map((field) => [field.token, field]));
+    const orderedMetaKeys = [];
+
+    if (project.team && !customMetaFields.some((field) => String(field.label || '').trim().toUpperCase() === 'TEAM')) {
+      const teamField = {
+        id: 'legacy-team',
+        token: 'custom:legacy-team',
+        label: 'TEAM',
+        value: project.team,
+        aliases: new Set(['legacy-team', 'custom:legacy-team', 'label:TEAM'])
+      };
+      customMetaFields.push(teamField);
+      customMetaFieldMap.set(teamField.token, teamField);
     }
 
-    if (project.program) {
-      metaHTML += `
-        <div class="meta-item">
-          <span class="meta-label">PROGRAM</span>
-          <span class="meta-value">${escapeHtml(project.program)}</span>
-        </div>
-      `;
+    function resolveCustomMetaField(key) {
+      const normalizedKey = String(key || '').trim();
+      if (!normalizedKey) return null;
+
+      if (customMetaFieldMap.has(normalizedKey)) {
+        return customMetaFieldMap.get(normalizedKey);
+      }
+
+      const prefixedKey = normalizedKey.startsWith('custom:') ? normalizedKey : `custom:${normalizedKey}`;
+      if (customMetaFieldMap.has(prefixedKey)) {
+        return customMetaFieldMap.get(prefixedKey);
+      }
+
+      const normalizedLabelKey = normalizedKey.startsWith('label:')
+        ? `label:${normalizedKey.slice(6).toUpperCase()}`
+        : `label:${normalizedKey.toUpperCase()}`;
+
+      return customMetaFields.find((field) => field.aliases.has(normalizedKey) || field.aliases.has(prefixedKey) || field.aliases.has(normalizedLabelKey)) || null;
     }
 
-    if (project.studio) {
-      metaHTML += `
-        <div class="meta-item">
-          <span class="meta-label">STUDIO</span>
-          <span class="meta-value">${escapeHtml(project.studio)}</span>
-        </div>
-      `;
-    }
-
-    // Drawing-specific fields
-    if (project.year) {
-      metaHTML += `
-        <div class="meta-item">
-          <span class="meta-label">YEAR</span>
-          <span class="meta-value">${escapeHtml(project.year)}</span>
-        </div>
-      `;
-    }
-
-    if (project.medium) {
-      metaHTML += `
-        <div class="meta-item">
-          <span class="meta-label">MEDIUM</span>
-          <span class="meta-value">${escapeHtml(project.medium)}</span>
-        </div>
-      `;
-    }
-
-    if (project.series) {
-      metaHTML += `
-        <div class="meta-item">
-          <span class="meta-label">SERIES</span>
-          <span class="meta-value">${escapeHtml(project.series)}</span>
-        </div>
-      `;
-    }
-    
-    // 커스텀 필드 렌더링
-    if (project.custom_fields && Array.isArray(project.custom_fields)) {
-      project.custom_fields.forEach(field => {
-        if (field.label && field.value) {
-          metaHTML += `
-            <div class="meta-item">
-              <span class="meta-label">${escapeHtml(field.label)}</span>
-              <span class="meta-value">${escapeHtml(field.value)}</span>
-            </div>
-          `;
+    if (Array.isArray(project.meta_field_order)) {
+      project.meta_field_order.forEach((key) => {
+        let normalizedKey = key;
+        const customField = resolveCustomMetaField(key);
+        if (!baseMetaFieldMap.has(normalizedKey) && customField) {
+          normalizedKey = customField.token;
+        }
+        if ((baseMetaFieldMap.has(normalizedKey) || customMetaFieldMap.has(normalizedKey)) && !orderedMetaKeys.includes(normalizedKey)) {
+          orderedMetaKeys.push(normalizedKey);
         }
       });
     }
 
-    // Determine image base path
-    const imageFolder = isDrawings ? 'images/drawings' : (isGraphics ? 'images/graphics' : 'images/projects');
+    baseMetaFields.forEach((field) => {
+      if (!orderedMetaKeys.includes(field.key)) {
+        orderedMetaKeys.push(field.key);
+      }
+    });
+    customMetaFields.forEach((field) => {
+      if (!orderedMetaKeys.includes(field.token)) {
+        orderedMetaKeys.push(field.token);
+      }
+    });
+
+    orderedMetaKeys.forEach((key) => {
+      const baseField = baseMetaFieldMap.get(key);
+      if (baseField) {
+        const value = project[key];
+        if (!value) return;
+
+        metaHTML += `
+          <div class="meta-item">
+            <span class="meta-label">${baseField.label}</span>
+            <span class="meta-value">${renderLinkedText(value)}</span>
+          </div>
+        `;
+        return;
+      }
+
+      const customField = customMetaFieldMap.get(key);
+      if (!customField || !customField.value) return;
+
+      metaHTML += `
+        <div class="meta-item">
+          <span class="meta-label">${escapeHtml(customField.label)}</span>
+          <span class="meta-value">${renderLinkedText(customField.value)}</span>
+        </div>
+      `;
+    });
+
+    // 커스텀 필드 렌더링
     const slug = project.slug || project.title.toLowerCase().replace(/\s+/g, '-');
-    const basePath = `${imageFolder}/${slug}`;
+    if (project.year) {
+      metaHTML += `
+        <div class="meta-item">
+          <span class="meta-label">YEAR</span>
+          <span class="meta-value">${renderLinkedText(project.year)}</span>
+        </div>
+      `;
+    }
+    if (project.medium) {
+      metaHTML += `
+        <div class="meta-item">
+          <span class="meta-label">MEDIUM</span>
+          <span class="meta-value">${renderLinkedText(project.medium)}</span>
+        </div>
+      `;
+    }
+    if (project.series) {
+      metaHTML += `
+        <div class="meta-item">
+          <span class="meta-label">SERIES</span>
+          <span class="meta-value">${renderLinkedText(project.series)}</span>
+        </div>
+      `;
+    }
+    const basePath = getProjectImageBasePath(project);
+    const heroCandidates = getProjectHeroCandidates(project);
+    const heroInitialSrc = heroImageResolvedSrc.get(basePath) || heroCandidates[0] || '';
+    const heroFallbackSources = heroCandidates.filter((src) => src !== heroInitialSrc);
 
     // Generate sub images (01.jpg/webp - 20.jpg/webp) with lazy loading and fallback
     let subImagesHTML = '';
@@ -575,7 +885,7 @@
       `;
     }
 
-    // Generate slide images (slide_images/1.jpg/webp - slide_images/20.jpg/webp) with lazy loading and fallback
+    // Generate initial slide images (additional slides are discovered and appended after render)
     let slideImagesHTML = '';
     for (let i = 1; i <= 20; i++) {
       slideImagesHTML += `
@@ -601,19 +911,9 @@
       <!-- Hero Section: Image Left, Text Right -->
       <div class="project-hero">
         <figure class="project-cover reveal-image">
-          <img src="${basePath}/main.jpg" alt="${escapeHtml(project.title)} main" class="project-cover-image" 
+          <img src="${heroInitialSrc}" alt="${escapeHtml(project.title)} main" class="project-cover-image"
             style="object-position: ${project.cover_position || 'center center'}; aspect-ratio: ${aspectRatio};"
-            onerror="
-              var self=this;
-              var tryImages=['${basePath}/main.webp','${basePath}/cover.jpg','${basePath}/cover.webp'];
-              var tryIndex=0;
-              function tryNext(){
-                if(tryIndex>=tryImages.length){self.style.display='none';self.parentElement.innerHTML='<div class=\\'image-placeholder project-cover-image\\'></div>';return;}
-                self.src=tryImages[tryIndex++];
-              }
-              self.onerror=tryNext;
-              tryNext();
-            ">
+            loading="eager" fetchpriority="high" decoding="async">
         </figure>
 
         <div class="project-content">
@@ -632,10 +932,12 @@
             ${metaHTML}
           </div>
 
+          ${(project.description || project.description_ko) ? `
           <div class="project-description">
-            <p class="description-en">${escapeHtml(project.description)}</p>
-            ${project.description_ko ? `<p class="description-ko" style="display: none;">${escapeHtml(project.description_ko)}</p>` : ''}
+            ${project.description ? `<p class="description-en">${renderLinkedText(project.description)}</p>` : ''}
+            ${project.description_ko ? `<p class="description-ko" style="display: none;">${renderLinkedText(project.description_ko)}</p>` : ''}
           </div>
+          ` : ''}
         </div>
       </div>
 
@@ -681,11 +983,12 @@
       </div>
     `;
 
-    // Apply lazy loading to detail images
-    initDetailLazyLoading(detail);
-    
-    // Wait for model images to load and adjust grid
-    waitForModelImages(detail);
+    const coverImage = detail.querySelector('.project-cover-image');
+    setImageLoadingState(coverImage, true);
+    attachHeroImageFallback(coverImage, heroFallbackSources);
+
+    // Immediately request all detail images when the overlay opens.
+    eagerLoadAllDetailImages(Array.from(detail.querySelectorAll('.lazy-image')));
     
     // 스크롤 시 이미지 서서히 나타나는 애니메이션 적용
     initOverlayScrollReveal(detail);
@@ -696,6 +999,7 @@
       if (Object.keys(captions).length > 0) {
         setupCaptionObservers(detail, captions);
       }
+      discoverExtraSlideImages(detail, basePath, project.title, captions);
     });
     
     // 언어 전환 버튼 이벤트 바인딩
@@ -790,6 +1094,58 @@
       applyCaptionsToLoadedImages(container);
     }, 1500);
   }
+
+  async function discoverExtraSlideImages(container, basePath, projectTitle, captions) {
+    const slideContainer = container.querySelector('.project-images--extra');
+    if (!slideContainer) return;
+
+    const existingSlides = slideContainer.querySelectorAll('.project-image').length;
+    let nextIndex = Math.max(existingSlides + 1, 21);
+
+    while (container.isConnected) {
+      const resolvedSrc = await preloadImageSequence([
+        `${basePath}/slide_images/${nextIndex}.jpg`,
+        `${basePath}/slide_images/${nextIndex}.webp`
+      ]);
+
+      if (!resolvedSrc || !container.isConnected) {
+        break;
+      }
+
+      const figure = document.createElement('figure');
+      figure.className = 'project-image reveal-image';
+
+      const img = document.createElement('img');
+      img.className = 'lazy-image';
+      img.alt = `${projectTitle} slide ${nextIndex}`;
+      img.dataset.src = `${basePath}/slide_images/${nextIndex}.jpg`;
+      img.dataset.srcWebp = `${basePath}/slide_images/${nextIndex}.webp`;
+
+      const captionKey = `slide_${nextIndex}`;
+      if (captions && captions[captionKey]) {
+        img.dataset.caption = captions[captionKey];
+        img.dataset.captionKey = captionKey;
+      }
+
+      figure.appendChild(img);
+      slideContainer.appendChild(figure);
+
+      setImageLoadingState(img, true);
+      loadLazyImageWithFallback(img);
+
+      if (img.dataset.caption) {
+        const attachCaption = () => addCaptionToImage(figure, img.dataset.caption);
+        if (img.complete && img.naturalWidth > 0) {
+          attachCaption();
+        } else {
+          img.addEventListener('load', attachCaption, { once: true });
+        }
+      }
+
+      requestOverlayRevealRefresh(container);
+      nextIndex += 1;
+    }
+  }
   
   function applyCaptionsToLoadedImages(container) {
     const allImages = container.querySelectorAll('.project-image img[data-caption]');
@@ -828,7 +1184,7 @@
     // 캡션 요소 추가
     const caption = document.createElement('div');
     caption.className = 'image-caption';
-    caption.innerHTML = `<p>${escapeHtml(captionText)}</p>`;
+    caption.innerHTML = `<p>${renderLinkedText(captionText)}</p>`;
     wrapper.appendChild(caption);
   }
   
@@ -836,14 +1192,17 @@
   // 모델 이미지는 waitForModelImages에서 별도 처리하므로 제외
   function initDetailLazyLoading(container) {
     // 모델 이미지를 제외한 lazy-image만 선택
-    const lazyImages = container.querySelectorAll('.lazy-image:not(.model-image img)');
-    const nonModelImages = Array.from(container.querySelectorAll('.lazy-image')).filter(
-      img => !img.closest('.model-image')
-    );
+    const lazyImages = Array.from(container.querySelectorAll('.lazy-image'));
+    if (!lazyImages.length) return;
+
+    if (typeof IntersectionObserver !== 'function') {
+      lazyImages.forEach((img) => loadLazyImageWithFallback(img));
+      return;
+    }
     
     const observerOptions = {
       root: container.closest('.overlay-scroll'),
-      rootMargin: '200px',
+      rootMargin: window.matchMedia('(max-width: 768px)').matches ? '320px' : '200px',
       threshold: 0.01
     };
     
@@ -881,7 +1240,158 @@
     }, observerOptions);
     
     // 모델 이미지를 제외한 이미지들만 관찰
-    nonModelImages.forEach(img => lazyObserver.observe(img));
+    lazyImages.forEach(img => lazyObserver.observe(img));
+  }
+
+  function loadLazyImageWithFallback(img) {
+    if (!img || (img.classList.contains('lazy-loaded') && img.src && img.complete && img.naturalWidth > 0)) {
+      setImageLoadingState(img, false);
+      return;
+    }
+
+    const srcJpg = img.dataset.src;
+    const srcWebp = img.dataset.srcWebp;
+    if (!srcJpg && !srcWebp) return;
+
+    img.onload = function() {
+      img.classList.add('lazy-loaded');
+      setImageLoadingState(img, false);
+    };
+    img.onerror = function() {
+      if (srcWebp && !img.dataset.triedWebp) {
+        img.dataset.triedWebp = '1';
+        img.src = srcWebp;
+      } else if (img.parentElement) {
+        setImageLoadingState(img, false);
+        img.parentElement.style.display = 'none';
+      }
+    };
+    img.src = srcJpg || srcWebp;
+  }
+
+  function eagerLoadAllDetailImages(images) {
+    if (!images || !images.length) return;
+
+    images.forEach((img, index) => {
+      if (!img) return;
+      setImageLoadingState(img, true);
+      img.setAttribute('loading', 'eager');
+      img.setAttribute('fetchpriority', index < 12 ? 'high' : 'auto');
+    });
+
+    const startLoading = () => {
+      images.forEach((img, index) => {
+        window.setTimeout(() => {
+          loadLazyImageWithFallback(img);
+        }, Math.min(index * 10, 220));
+      });
+    };
+
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(startLoading);
+      return;
+    }
+
+    startLoading();
+  }
+
+  function setImageLoadingState(img, isLoading) {
+    if (!img) return;
+
+    const frame = img.closest('.project-image, .model-image, .project-cover');
+    if (!frame) return;
+
+    frame.classList.toggle('image-loading', Boolean(isLoading));
+    frame.classList.toggle('image-ready', !isLoading);
+  }
+
+  function warmupDetailImages(container, count) {
+    const warmupTargets = Array.from(container.querySelectorAll('.lazy-image')).slice(0, count);
+    warmupTargets.forEach((img) => loadLazyImageWithFallback(img));
+  }
+
+  function eagerLoadPriorityDetailImages(container) {
+    if (!container) return;
+
+    const loadSlides = () => {
+      const slideImages = Array.from(
+        container.querySelectorAll('.project-images--extra .lazy-image')
+      );
+      if (!slideImages.length) return;
+
+      const eagerCount = window.matchMedia('(max-width: 768px)').matches
+        ? slideImages.length
+        : Math.min(slideImages.length, 12);
+
+      slideImages.slice(0, eagerCount).forEach((img, index) => {
+        window.setTimeout(() => {
+          loadLazyImageWithFallback(img);
+        }, Math.min(index * 24, 240));
+      });
+    };
+
+    const kickoff = () => {
+      waitForModelImages(container);
+      loadSlides();
+    };
+
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => {
+        window.setTimeout(kickoff, 40);
+      });
+      return;
+    }
+
+    window.setTimeout(kickoff, 40);
+  }
+
+  function scheduleDetailWarmup(container, count) {
+    const runWarmup = () => warmupDetailImages(container, count);
+
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(runWarmup, { timeout: 900 });
+      return;
+    }
+
+    window.setTimeout(runWarmup, 180);
+  }
+
+  function attachHeroImageFallback(img, fallbackSources) {
+    if (!img) return;
+
+    const sources = Array.isArray(fallbackSources) ? fallbackSources.slice() : [];
+    let nextIndex = 0;
+
+    const swapToPlaceholder = () => {
+      const figure = img.parentElement;
+      if (!figure) return;
+      figure.classList.remove('image-loading');
+      figure.classList.add('image-ready');
+      figure.innerHTML = '<div class="image-placeholder project-cover-image"></div>';
+    };
+
+    const tryNextSource = () => {
+      if (nextIndex >= sources.length) {
+        img.onerror = null;
+        swapToPlaceholder();
+        return;
+      }
+
+      const nextSrc = sources[nextIndex++];
+      img.src = nextSrc;
+    };
+
+    img.onerror = tryNextSource;
+
+    img.onload = function() {
+      setImageLoadingState(img, false);
+    };
+
+    if (!img.getAttribute('src')) {
+      tryNextSource();
+    } else if (img.complete && img.naturalWidth > 0) {
+      setImageLoadingState(img, false);
+    }
   }
 
   // Wait for model images to load then adjust grid (with lazy loading support)
@@ -1053,6 +1563,11 @@
   
   // Initialize grid items reveal on scroll
   function initScrollReveal() {
+    if (typeof IntersectionObserver !== 'function') {
+      gridObserver = null;
+      return;
+    }
+
     gridObserver = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
         if (entry.isIntersecting) {
@@ -1068,11 +1583,30 @@
   }
   
   function animateGridItems() {
+    const touchLikeDevice = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+    const shouldRevealImmediately = touchLikeDevice || window.matchMedia('(max-width: 1024px)').matches || !gridObserver;
+
     gridItemContainers.forEach((item, index) => {
       item.classList.add('reveal');
+
+      if (shouldRevealImmediately) {
+        item.classList.add('revealed');
+        item.style.transitionDelay = '0s';
+        return;
+      }
+
       item.style.transitionDelay = `${index * 0.05}s`;
-      if (gridObserver) gridObserver.observe(item);
+      gridObserver.observe(item);
     });
+
+    // Observer가 누락되거나 지연되는 환경(iPad Safari 포함)에서 안전하게 표시
+    window.setTimeout(() => {
+      gridItemContainers.forEach((item) => {
+        if (item.classList.contains('reveal') && !item.classList.contains('revealed')) {
+          item.classList.add('revealed');
+        }
+      });
+    }, 1300);
   }
   
   // Popup opening animation
@@ -1081,22 +1615,31 @@
     if (!scrollContainer) return;
     
     // Get elements
-    const cover = container.querySelector('.project-cover');
     const title = container.querySelector('.project-title');
     const meta = container.querySelector('.project-meta');
     const desc = container.querySelector('.project-description');
+
+    const disableOverlayRevealMotion =
+      window.matchMedia('(hover: none), (pointer: coarse)').matches ||
+      window.matchMedia('(max-width: 1024px)').matches ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     
     // Add reveal class to all
-    [cover, title, meta, desc].forEach(el => {
+    [title, meta, desc].forEach(el => {
       if (el) el.classList.add('reveal');
     });
+
+    if (disableOverlayRevealMotion) {
+      [title, meta, desc].forEach(el => {
+        if (el) el.classList.add('revealed');
+      });
+      return;
+    }
     
     // Trigger animations immediately when popup opens
     requestAnimationFrame(() => {
       // Title appears immediately
       if (title) title.classList.add('revealed');
-      // Cover appears immediately
-      if (cover) cover.classList.add('revealed');
       // Meta with slight delay
       setTimeout(() => {
         if (meta) meta.classList.add('revealed');
@@ -1107,30 +1650,6 @@
       }, 300);
     });
     
-    // Scroll-triggered images
-    const scrollImages = container.querySelectorAll(
-      '.project-images--sub .project-image, .model-image, .project-images--extra .project-image'
-    );
-    
-    overlayObserver = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('revealed');
-        } else {
-          entry.target.classList.remove('revealed');
-        }
-      });
-    }, {
-      root: scrollContainer,
-      rootMargin: '50px 0px',
-      threshold: 0.1
-    });
-    
-    scrollImages.forEach((img, index) => {
-      img.classList.add('reveal');
-      img.style.transitionDelay = `${(index % 3) * 0.1}s`;
-      overlayObserver.observe(img);
-    });
   }
 
   // ============================================
@@ -1142,6 +1661,39 @@
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  function renderLinkedText(text) {
+    if (!text) return '';
+
+    const pattern = /\[size=(\d{2,3})\]([\s\S]*?)\[\/size\]|\[([^\]]+)\]\s*\(([^)]+)\)/g;
+    let result = '';
+    let lastIndex = 0;
+    let match;
+
+    while ((match = pattern.exec(text)) !== null) {
+      result += escapeHtml(text.slice(lastIndex, match.index));
+
+      if (match[1]) {
+        const sizePercent = Number.parseInt(match[1], 10);
+        const safeSize = Number.isFinite(sizePercent) ? Math.max(70, Math.min(sizePercent, 200)) : 125;
+        const innerText = match[2] || '';
+        result += `<span class="text-size-adjust" style="font-size: ${(safeSize / 100).toFixed(2)}em;">${renderLinkedText(innerText)}</span>`;
+      } else {
+        const linkText = match[3];
+        const urlPart = match[4];
+        const dividerIndex = urlPart.lastIndexOf('|');
+        const rawUrl = dividerIndex >= 0 ? urlPart.slice(0, dividerIndex).trim() : urlPart.trim();
+        const rawStyle = dividerIndex >= 0 ? urlPart.slice(dividerIndex + 1).trim().toLowerCase() : 'highlight';
+        const className = rawStyle === 'underline' ? 'link-underline' : 'link-highlight';
+
+        result += `<a href="${escapeHtml(rawUrl)}" class="${className}" target="_blank" rel="noopener">${escapeHtml(linkText)}</a>`;
+      }
+      lastIndex = pattern.lastIndex;
+    }
+
+    result += escapeHtml(text.slice(lastIndex));
+    return result;
   }
 
   // ============================================
@@ -1346,13 +1898,21 @@
     const revealImages = container.querySelectorAll('.reveal-image');
     
     if (revealImages.length === 0) return;
+
+    if (typeof IntersectionObserver !== 'function' || !scrollContainer) {
+      revealImages.forEach((img) => {
+        img.classList.add('is-visible');
+        img.style.transitionDelay = '0s';
+      });
+      return;
+    }
     
     // Destroy previous observer if exists
     if (overlayRevealObserver) {
       overlayRevealObserver.disconnect();
     }
     
-    // Toggle visibility on enter/exit so images can fade in/out while scrolling inside overlay
+    // Toggle visibility on enter/exit so all overlay images can fade in and out while scrolling.
     overlayRevealObserver = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
         if (entry.isIntersecting) {
@@ -1363,8 +1923,8 @@
       });
     }, {
       root: scrollContainer, // overlay scroll container
-      rootMargin: '50px 0px -30px 0px',
-      threshold: 0.05
+      rootMargin: '80px 0px -6% 0px',
+      threshold: 0.01
     });
     
     // Add staggered delay for visual effect
@@ -1374,6 +1934,40 @@
       img.style.transitionDelay = `${delay}s`;
       overlayRevealObserver.observe(img);
     });
+
+    revealImages.forEach((img) => {
+      if (isRevealImageVisible(img, scrollContainer)) {
+        img.classList.add('is-visible');
+      } else {
+        img.classList.remove('is-visible');
+      }
+    });
+  }
+
+  function isRevealImageVisible(el, scrollContainer) {
+    if (!el) return false;
+
+    const rect = el.getBoundingClientRect();
+    if (scrollContainer) {
+      const rootRect = scrollContainer.getBoundingClientRect();
+      return rect.bottom > rootRect.top + 24 && rect.top < rootRect.bottom - 24;
+    }
+
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  }
+
+  function requestOverlayRevealRefresh(container) {
+    if (!container) return;
+
+    const refresh = () => initOverlayRevealImages(container);
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(refresh);
+      });
+      return;
+    }
+
+    window.setTimeout(refresh, 32);
   }
 
   // ============================================

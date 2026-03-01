@@ -1,0 +1,4 @@
+Version: v1
+Date: 2026-02-20 23:24:15
+Type: Full Backup (모든 파일)
+Files: projects.html, drawings.html, graphics.html, about.html, index.html, study.html, styles.css, script.js, home_data.json, tabs_config.json
