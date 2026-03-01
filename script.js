@@ -450,10 +450,10 @@
     if (navFileSet.size) {
       footerTabs = footerTabs.filter(tab => navFileSet.has(getPageFileName(tab.file || '')));
     }
-    if (!footerTabs.length) {
-      footerTabs = navTabs;
-    }
-    if (!footerTabs.length) return;
+    const hasVisibleFooterItems = footerTabs.some(tab =>
+      Array.isArray(tab.items) && tab.items.some(item => item && item.visible !== false)
+    );
+    if (!footerTabs.length || !hasVisibleFooterItems) return;
 
     renderFooterColumns(columnsEl, footerTabs);
     window.addEventListener('resize', () => applyFooterDensity(columnsEl));
