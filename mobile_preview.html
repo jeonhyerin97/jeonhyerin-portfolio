@@ -136,10 +136,12 @@
       const safePage = requested.replace(/[\\\/]/g, "");
       const allowed = ["index.html", "projects.html", "drawings.html", "graphics.html", "about.html", "study.html"];
       const target = allowed.includes(safePage) ? safePage : "projects.html";
+      const assetVersion = "v=20260302-footer-final";
+      const targetWithVersion = target.includes("?") ? `${target}&${assetVersion}` : `${target}?${assetVersion}`;
       const isHttpContext = window.location.protocol === "http:" || window.location.protocol === "https:";
       const shareUrl = params.get("share")
         ? decodeURIComponent(params.get("share"))
-        : (isHttpContext ? new URL(target, window.location.href).toString() : "");
+        : (isHttpContext ? new URL(targetWithVersion, window.location.href).toString() : "");
 
       const frame = document.getElementById("previewFrame");
       const label = document.getElementById("previewLabel");
@@ -149,7 +151,7 @@
       const copyPhoneBtn = document.getElementById("copyPhoneLinkBtn");
       const copyBtn = document.getElementById("copyLinkBtn");
 
-      frame.src = target;
+      frame.src = targetWithVersion;
       label.textContent = "모바일 미리보기 · " + target;
       document.title = "모바일 미리보기 - " + target;
       if (shareUrl) {

@@ -24,6 +24,17 @@
   let armedGridResetTimer = null;
   const heroImagePreloadCache = new Map();
   const heroImageResolvedSrc = new Map();
+  const APP_VERSION = '20260302-footer-final';
+  const VERSIONED_HTML_FILES = new Set([
+    'index.html',
+    'projects.html',
+    'drawings.html',
+    'graphics.html',
+    'about.html',
+    'study.html',
+    'dd.html',
+    'd.html'
+  ]);
 
   // ============================================
   // DOM Elements
@@ -34,11 +45,51 @@
   const gridItemContainers = document.querySelectorAll('.grid-item');
   const projectsDataEl = document.getElementById('projectsData');
 
+  function runInitStep(label, callback) {
+    try {
+      callback();
+    } catch (error) {
+      console.warn(`${label} failed:`, error);
+    }
+  }
+
+  function appendVersionParam(rawHref) {
+    if (!rawHref || rawHref === '#') return rawHref;
+    if (/^(mailto:|tel:|javascript:)/i.test(rawHref)) return rawHref;
+
+    let resolvedUrl;
+    try {
+      resolvedUrl = new URL(rawHref, window.location.href);
+    } catch (error) {
+      return rawHref;
+    }
+
+    if (resolvedUrl.origin !== window.location.origin) return rawHref;
+
+    const fileName = (resolvedUrl.pathname.split('/').pop() || '').toLowerCase();
+    if (!VERSIONED_HTML_FILES.has(fileName)) return rawHref;
+
+    resolvedUrl.searchParams.set('v', APP_VERSION);
+    return `${fileName}${resolvedUrl.search}${resolvedUrl.hash}`;
+  }
+
+  function versionInternalDocumentLinks() {
+    document.querySelectorAll('a[href]').forEach(link => {
+      const href = link.getAttribute('href');
+      const versionedHref = appendVersionParam(href);
+      if (versionedHref && versionedHref !== href) {
+        link.setAttribute('href', versionedHref);
+      }
+    });
+  }
+
   // ============================================
   // Initialize
   // ============================================
   
   function init() {
+    runInitStep('versionInternalDocumentLinks', versionInternalDocumentLinks);
+
     // Parse project data if available
     if (projectsDataEl) {
       try {
@@ -115,28 +166,18 @@
     // Global keyboard events
     document.addEventListener('keydown', handleKeyDown);
 
-    // 스크롤 애니메이션 초기화
-    initScrollReveal();
-    
-    // Add entrance animations to grid items
-    animateGridItems();
-    
-    // 썸네일 이미지 fallback 처리 (thumb.jpg → cover.jpg)
-    handleThumbnailFallback();
-    
-    // 아카이브 카운트 업데이트
-    updateArchiveCount();
-    
-    // 푸터 프로젝트 목록 렌더링
-    renderFooterProjects();
-    primeInitialHeroImages();
-
-    openProjectFromQueryParam();
-    applyAboutAffiliationMobileBreak();
-    syncAboutAlignmentAxis();
+    runInitStep('renderFooterProjects', renderFooterProjects);
+    runInitStep('initScrollReveal', initScrollReveal);
+    runInitStep('animateGridItems', animateGridItems);
+    runInitStep('handleThumbnailFallback', handleThumbnailFallback);
+    runInitStep('updateArchiveCount', updateArchiveCount);
+    runInitStep('primeInitialHeroImages', primeInitialHeroImages);
+    runInitStep('openProjectFromQueryParam', openProjectFromQueryParam);
+    runInitStep('applyAboutAffiliationMobileBreak', applyAboutAffiliationMobileBreak);
+    runInitStep('syncAboutAlignmentAxis', syncAboutAlignmentAxis);
     const handleAboutResponsiveLayout = () => {
-      syncAboutAlignmentAxis();
-      applyAboutAffiliationMobileBreak();
+      runInitStep('syncAboutAlignmentAxis', syncAboutAlignmentAxis);
+      runInitStep('applyAboutAffiliationMobileBreak', applyAboutAffiliationMobileBreak);
     };
     window.addEventListener('resize', handleAboutResponsiveLayout);
     window.addEventListener('load', handleAboutResponsiveLayout);
@@ -274,6 +315,17 @@
     return file || 'index.html';
   }
 
+  function getPageFileName(rawRef) {
+    if (!rawRef) return '';
+
+    try {
+      const resolvedUrl = new URL(rawRef, window.location.href);
+      return (resolvedUrl.pathname.split('/').pop() || '').toLowerCase();
+    } catch (error) {
+      return String(rawRef || '').split('?')[0].split('#')[0].split('/').pop().toLowerCase();
+    }
+  }
+
   function normalizeFooterTabsData(footerData) {
     if (footerData && Array.isArray(footerData.tabs) && footerData.tabs.length) {
       return footerData.tabs.filter(tab => tab && tab.visible !== false).map(tab => ({
@@ -320,10 +372,10 @@
     columnsEl.style.setProperty('--footer-column-count', String(Math.max(footerTabs.length, 1)));
     columnsEl.innerHTML = footerTabs
       .map((tab, tabIndex) => {
-        const tabFile = String(tab.file || '').toLowerCase();
+        const tabFile = getPageFileName(tab.file || '');
         const isCurrentTab = tabFile && tabFile === currentFile;
         const title = String(tab.name || tab.id || '').toUpperCase();
-        const safeHref = tab.file || '#';
+        const safeHref = appendVersionParam(tab.file || '#');
 
         const visibleItems = (Array.isArray(tab.items) ? tab.items : []).filter(item => item && item.visible !== false);
         const linksHtml = visibleItems.length
@@ -388,12 +440,15 @@
         file: link.getAttribute('href') || '',
         items: []
       }))
-      .filter(tab => tab.file && !tab.file.toLowerCase().includes('about.html'));
-    const navFileSet = new Set(navTabs.map(tab => String(tab.file || '').toLowerCase()));
+      .filter(tab => {
+        const pageFile = getPageFileName(tab.file || '');
+        return pageFile && pageFile !== 'about.html';
+      });
+    const navFileSet = new Set(navTabs.map(tab => getPageFileName(tab.file || '')));
 
     let footerTabs = normalizeFooterTabsData(footerData);
     if (navFileSet.size) {
-      footerTabs = footerTabs.filter(tab => navFileSet.has(String(tab.file || '').toLowerCase()));
+      footerTabs = footerTabs.filter(tab => navFileSet.has(getPageFileName(tab.file || '')));
     }
     if (!footerTabs.length) {
       footerTabs = navTabs;
