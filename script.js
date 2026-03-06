@@ -24,7 +24,7 @@
   let armedGridResetTimer = null;
   const heroImagePreloadCache = new Map();
   const heroImageResolvedSrc = new Map();
-  const APP_VERSION = '20260302-mobile-image-fast';
+  const APP_VERSION = '20260306-grid-visibility-fix';
   const VERSIONED_HTML_FILES = new Set([
     'index.html',
     'projects.html',
@@ -1614,6 +1614,13 @@
   }
   
   function animateGridItems() {
+    // Failsafe: keep archive grid visible even if reveal observers/timing fail on some devices.
+    gridItemContainers.forEach((item) => {
+      item.classList.add('reveal', 'revealed');
+      item.style.transitionDelay = '0s';
+    });
+    return;
+
     const touchLikeDevice = window.matchMedia('(hover: none), (pointer: coarse)').matches;
     const shouldRevealImmediately = touchLikeDevice || window.matchMedia('(max-width: 1024px)').matches || !gridObserver;
 
