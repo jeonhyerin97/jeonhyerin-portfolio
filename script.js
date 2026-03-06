@@ -977,10 +977,9 @@
           </div>
           ` : ''}
         </div>
-      </div>
 
-      <!-- Images Wrapper -->
-      <div class="project-images-wrapper">
+        <!-- Images Wrapper -->
+        <div class="project-images-wrapper">
         ${slug === 'soft_concrete' ? `
         <!-- Model Images First for soft_concrete -->
         <div class="project-images-section project-images-section--model" style="margin-top: 0;">
@@ -1018,6 +1017,7 @@
         <footer class="overlay-footer">
           <span class="overlay-footer-text">JEONHYERIN © 2026 All rights reserved.</span>
         </footer>
+        </div>
       </div>
     `;
 
