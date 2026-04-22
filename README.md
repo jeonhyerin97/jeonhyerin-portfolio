@@ -7,7 +7,6 @@
 ## 개요
 
 - **디자인 컨셉**: 미니멀, 모던, 블랙 배경
-- **참고 사이트**: [big.dk](https://big.dk/), [vcrworks.kr/prjct](https://vcrworks.kr/prjct)
 - **기술 스택**: 순수 HTML, CSS, JavaScript (프레임워크 없음)
 
 ---
